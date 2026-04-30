@@ -128,6 +128,9 @@ app.MapPost("/api/halls", (CreateHallRequest request) =>
 app.MapGet("/api/halls/{id:guid}/tables", (Guid id) =>
     Results.Ok(tables.Values.Where(table => table.HallId == id).OrderBy(table => table.Name)));
 
+app.MapGet("/api/tables/{id:guid}", (Guid id) =>
+    tables.TryGetValue(id, out var table) ? Results.Ok(table) : HttpResults.NotFound("Table", id));
+
 app.MapPost("/api/tables", (CreateTableRequest request) =>
 {
     if (!halls.ContainsKey(request.HallId))
@@ -170,6 +173,9 @@ app.MapGet("/api/hookahs", (Guid? branchId, string? status) =>
 
     return Results.Ok(query.OrderBy(hookah => hookah.Name));
 });
+
+app.MapGet("/api/hookahs/{id:guid}", (Guid id) =>
+    hookahs.TryGetValue(id, out var hookah) ? Results.Ok(hookah) : HttpResults.NotFound("Hookah", id));
 
 app.MapPost("/api/hookahs", (CreateHookahRequest request) =>
 {

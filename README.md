@@ -42,3 +42,11 @@ pnpm client:dev
 ```
 
 CRM runs on `http://localhost:3000`. Client app runs on `http://localhost:3001`.
+
+Docker Compose also includes `crm-app` and `client-app` services.
+
+With Nginx enabled in Compose, `http://localhost` serves the client app, `http://localhost/crm/` serves CRM, and `http://localhost/api/` proxies API Gateway.
+
+## Kubernetes
+
+Base manifests live in `infrastructure/kubernetes`.

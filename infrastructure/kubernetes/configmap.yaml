@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hookah-platform-config
+  namespace: hookah-platform
+data:
+  Jwt__Issuer: hookah-platform
+  Jwt__Audience: hookah-platform-clients
+  Services__analytics-service__BaseUrl: http://analytics-service:8080
+  Services__notification-service__BaseUrl: http://notification-service:8080
+  Services__booking-service__BaseUrl: http://booking-service:8080
+  Services__order-service__BaseUrl: http://order-service:8080
+  Services__promo-service__BaseUrl: http://promo-service:8080
+  Services__branch-service__BaseUrl: http://branch-service:8080
+  Services__mixology-service__BaseUrl: http://mixology-service:8080
+  Services__inventory-service__BaseUrl: http://inventory-service:8080

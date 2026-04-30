@@ -106,5 +106,12 @@ Content-Type: application/json
   "amount": 2000,
   "currency": "RUB",
   "type": "DEPOSIT",
-  "provider": "YOOKASSA"
+  "provider": "YOOKASSA",
+  "promocode": "HOOKAH20"
 }
+
+### Read table
+GET {{gateway}}/api/tables/30000000-0000-0000-0000-000000000001
+
+### Read hookah
+GET {{gateway}}/api/hookahs/40000000-0000-0000-0000-000000000001

@@ -182,6 +182,40 @@ app.MapPatch("/api/bookings/{id:guid}/no-show", (Guid id) =>
     return Results.Ok(bookings[id]);
 });
 
+app.MapPatch("/api/bookings/{id:guid}/complete", (Guid id) =>
+{
+    if (!bookings.TryGetValue(id, out var booking))
+    {
+        return HttpResults.NotFound("Booking", id);
+    }
+
+    if (booking.Status is not BookingStatuses.ClientArrived and not BookingStatuses.Confirmed)
+    {
+        return HttpResults.Conflict("Only confirmed or arrived bookings can be completed.");
+    }
+
+    bookings[id] = booking with { Status = BookingStatuses.Completed };
+    return Results.Ok(bookings[id]);
+});
+
+app.MapPatch("/api/bookings/mark-expired-no-shows", (DateTimeOffset? now) =>
+{
+    var referenceTime = now ?? DateTimeOffset.UtcNow;
+    var changed = new List<Booking>();
+
+    foreach (var (id, booking) in bookings)
+    {
+        if (booking.Status == BookingStatuses.Confirmed && booking.StartTime.AddMinutes(20) < referenceTime)
+        {
+            var updated = booking with { Status = BookingStatuses.NoShow };
+            bookings[id] = updated;
+            changed.Add(updated);
+        }
+    }
+
+    return Results.Ok(changed);
+});
+
 app.Run();
 
 static Dictionary<(Guid BranchId, DayOfWeek DayOfWeek), BranchWorkingHours> SeedWorkingHours()

@@ -1,0 +1,107 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth-service
+  namespace: hookah-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: auth-service
+  template:
+    metadata:
+      labels:
+        app: auth-service
+    spec:
+      containers:
+        - name: auth-service
+          image: hookah/auth-service:latest
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: hookah-platform-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth-service
+  namespace: hookah-platform
+spec:
+  selector:
+    app: auth-service
+  ports:
+    - port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mixology-service
+  namespace: hookah-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mixology-service
+  template:
+    metadata:
+      labels:
+        app: mixology-service
+    spec:
+      containers:
+        - name: mixology-service
+          image: hookah/mixology-service:latest
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: hookah-platform-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mixology-service
+  namespace: hookah-platform
+spec:
+  selector:
+    app: mixology-service
+  ports:
+    - port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-service
+  namespace: hookah-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: order-service
+  template:
+    metadata:
+      labels:
+        app: order-service
+    spec:
+      containers:
+        - name: order-service
+          image: hookah/order-service:latest
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: hookah-platform-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: order-service
+  namespace: hookah-platform
+spec:
+  selector:
+    app: order-service
+  ports:
+    - port: 8080
+      targetPort: 8080

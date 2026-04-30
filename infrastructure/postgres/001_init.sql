@@ -195,7 +195,10 @@ create table if not exists orders (
     comment text,
     created_at timestamp with time zone not null default now(),
     served_at timestamp with time zone null,
-    completed_at timestamp with time zone null
+    completed_at timestamp with time zone null,
+    payment_id uuid null,
+    paid_amount numeric(12, 2) not null default 0 check (paid_amount >= 0),
+    paid_at timestamp with time zone null
 );
 
 create table if not exists order_items (
@@ -225,9 +228,12 @@ create table if not exists payments (
     client_id uuid not null references users(id),
     order_id uuid null references orders(id),
     booking_id uuid null references bookings(id),
-    amount numeric(12, 2) not null check (amount > 0),
+    original_amount numeric(12, 2) not null check (original_amount > 0),
+    discount_amount numeric(12, 2) not null default 0 check (discount_amount >= 0),
+    payable_amount numeric(12, 2) not null check (payable_amount >= 0),
     currency varchar(8) not null,
     provider varchar(80) not null,
+    promocode varchar(80) null,
     external_payment_id varchar(160),
     status varchar(40) not null,
     type varchar(40) not null,
@@ -270,6 +276,18 @@ begin
     ) then
         alter table bookings
             add constraint fk_bookings_payment_id foreign key (payment_id) references payments(id);
+    end if;
+end $$;
+
+do $$
+begin
+    if not exists (
+        select 1 from information_schema.table_constraints
+        where constraint_name = 'fk_orders_payment_id'
+          and table_name = 'orders'
+    ) then
+        alter table orders
+            add constraint fk_orders_payment_id foreign key (payment_id) references payments(id);
     end if;
 end $$;
 

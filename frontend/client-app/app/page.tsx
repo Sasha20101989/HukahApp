@@ -24,6 +24,7 @@ export default function ClientBookingPage() {
   const [clientName, setClientName] = useState("");
   const [clientPhone, setClientPhone] = useState("");
   const [clientEmail, setClientEmail] = useState("");
+  const [promocode, setPromocode] = useState("");
   const [comment, setComment] = useState("");
   const [submitState, setSubmitState] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [submitMessage, setSubmitMessage] = useState("");
@@ -77,7 +78,8 @@ export default function ClientBookingPage() {
         amount: deposit,
         currency: "RUB",
         type: "DEPOSIT",
-        provider: "YOOKASSA"
+        provider: "YOOKASSA",
+        promocode: promocode.trim() || undefined
       });
 
       setSubmitState("success");
@@ -138,6 +140,11 @@ export default function ClientBookingPage() {
             <label className="field">
               <span>Email</span>
               <input value={clientEmail} onChange={(event) => setClientEmail(event.target.value)} placeholder="client@mail.com" />
+            </label>
+
+            <label className="field">
+              <span>Промокод</span>
+              <input value={promocode} onChange={(event) => setPromocode(event.target.value)} placeholder="HOOKAH20" />
             </label>
 
             <label className="field">

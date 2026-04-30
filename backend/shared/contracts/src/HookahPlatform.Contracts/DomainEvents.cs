@@ -91,6 +91,7 @@ public sealed record PaymentFailed(
 public sealed record ReviewCreated(
     Guid ReviewId,
     Guid ClientId,
+    Guid? MixId,
     int Rating,
     DateTimeOffset OccurredAt) : IntegrationEvent(OccurredAt);
 

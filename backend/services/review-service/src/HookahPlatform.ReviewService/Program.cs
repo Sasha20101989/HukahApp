@@ -19,7 +19,7 @@ app.MapPost("/api/reviews", async (CreateReviewRequest request, IEventPublisher 
 
     var review = new Review(Guid.NewGuid(), request.ClientId, request.MixId, request.OrderId, request.Rating, request.Text, DateTimeOffset.UtcNow);
     reviews[review.Id] = review;
-    await events.PublishAsync(new ReviewCreated(review.Id, review.ClientId, review.Rating, DateTimeOffset.UtcNow));
+    await events.PublishAsync(new ReviewCreated(review.Id, review.ClientId, review.MixId, review.Rating, DateTimeOffset.UtcNow));
 
     return Results.Created($"/api/reviews/{review.Id}", review);
 });

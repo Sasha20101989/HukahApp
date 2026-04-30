@@ -6,14 +6,14 @@ Implemented service endpoints:
 
 - Auth: `/api/auth/register`, `/api/auth/login`, `/api/auth/refresh`, `/api/auth/logout`, `/api/auth/roles`
 - Users: `/api/users/me`, `/api/users`, `/api/users/staff`, `/api/users/{id}`, `/api/staff/shifts`, `/api/staff/shifts/{id}/start`, `/api/staff/shifts/{id}/finish`, `/api/staff/shifts/{id}/cancel`
-- Branches: `/api/branches`, `/api/branches/{id}`, `/api/branches/{id}/working-hours`, `/api/branches/{id}/floor-plan`, `/api/branches/{id}/halls`, `/api/branches/{id}/zones`, `/api/zones`, `/api/halls`, `/api/halls/{id}/tables`, `/api/tables`, `/api/tables/{id}/status`
-- Hookahs: `/api/hookahs`, `/api/hookahs/{id}/status`
+- Branches: `/api/branches`, `/api/branches/{id}`, `/api/branches/{id}/working-hours`, `/api/branches/{id}/floor-plan`, `/api/branches/{id}/halls`, `/api/branches/{id}/zones`, `/api/zones`, `/api/halls`, `/api/halls/{id}/tables`, `/api/tables`, `/api/tables/{id}`, `/api/tables/{id}/status`
+- Hookahs: `/api/hookahs`, `/api/hookahs/{id}`, `/api/hookahs/{id}/status`
 - Bowls: `/api/bowls`, `/api/bowls/{id}`
 - Tobaccos: `/api/tobaccos`, `/api/tobaccos/{id}`
 - Mixes: `/api/mixes`, `/api/mixes/{id}`, `/api/mixes/calculate`, `/api/mixes/recommend`, `/api/mixes/{id}/visibility`
 - Inventory: `/api/inventory`, `/api/inventory/check`, `/api/inventory/in`, `/api/inventory/out`, `/api/inventory/adjustment`, `/api/inventory/movements`
-- Orders: `/api/orders`, `/api/orders/{id}`, `/api/orders/{id}/status`, `/api/orders/{id}/assign-hookah-master`, `/api/orders/{id}/coal-change`, `/api/orders/{id}/coal-timer`
-- Bookings: `/api/bookings/availability`, `/api/bookings`, `/api/bookings/{id}`, `/api/bookings/{id}/confirm`, `/api/bookings/{id}/cancel`, `/api/bookings/{id}/reschedule`, `/api/bookings/{id}/no-show`
+- Orders: `/api/orders`, `/api/orders/{id}`, `/api/orders/{id}/status`, `/api/orders/{id}/payment-succeeded`, `/api/orders/{id}/assign-hookah-master`, `/api/orders/{id}/coal-change`, `/api/orders/{id}/coal-timer`
+- Bookings: `/api/bookings/availability`, `/api/bookings`, `/api/bookings/{id}`, `/api/bookings/{id}/confirm`, `/api/bookings/{id}/cancel`, `/api/bookings/{id}/reschedule`, `/api/bookings/{id}/no-show`, `/api/bookings/{id}/complete`, `/api/bookings/mark-expired-no-shows`
 - Payments: `/api/payments/create`, `/api/payments/webhook/yookassa`, `/api/payments/{id}`, `/api/payments/{id}/refund`
 - Notifications: `/api/notifications`, `/api/notifications/templates`, `/api/notifications/preferences/{userId}`, `/api/notifications/{id}/read`, `/api/notifications/send`, `/api/notifications/dispatch-event`
 - Analytics: `/api/analytics/events`, `/api/analytics/dashboard`, `/api/analytics/top-mixes`, `/api/analytics/tobacco-usage`, `/api/analytics/staff-performance`, `/api/analytics/table-load`

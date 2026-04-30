@@ -38,6 +38,16 @@ app.MapPost("/api/orders", async (CreateOrderRequest request, IEventPublisher ev
         return HttpResults.Validation("Hookah, bowl and mix are required.");
     }
 
+    var resourceCheck = await CheckResourcesAvailableAsync(request.TableId, request.HookahId, httpClientFactory, configuration, cancellationToken);
+    if (!resourceCheck.IsAvailable)
+    {
+        return Results.Conflict(new
+        {
+            code = "resource_unavailable",
+            message = resourceCheck.Message
+        });
+    }
+
     var mix = await GetMixAsync(request.MixId, httpClientFactory, configuration, cancellationToken);
     if (mix is null)
     {
@@ -62,7 +72,7 @@ app.MapPost("/api/orders", async (CreateOrderRequest request, IEventPublisher ev
 
     var orderId = Guid.NewGuid();
     var item = new OrderItem(Guid.NewGuid(), orderId, request.HookahId, request.BowlId, request.MixId, request.Price ?? 850m, OrderStatuses.New);
-    var order = new HookahOrder(orderId, request.BranchId, request.TableId, request.ClientId, null, request.WaiterId, request.BookingId, OrderStatuses.New, item.Price, request.Comment, DateTimeOffset.UtcNow, null, null, null, [item]);
+    var order = new HookahOrder(orderId, request.BranchId, request.TableId, request.ClientId, null, request.WaiterId, request.BookingId, OrderStatuses.New, item.Price, request.Comment, DateTimeOffset.UtcNow, null, null, null, null, 0, null, [item]);
     orders[order.Id] = order;
 
     await MarkResourcesInUseAsync(request.TableId, request.HookahId, httpClientFactory, configuration, cancellationToken);
@@ -111,6 +121,17 @@ app.MapPatch("/api/orders/{id:guid}/assign-hookah-master", (Guid id, AssignHooka
     }
 
     orders[id] = order with { HookahMasterId = request.HookahMasterId };
+    return Results.Ok(orders[id]);
+});
+
+app.MapPatch("/api/orders/{id:guid}/payment-succeeded", (Guid id, OrderPaymentSucceededRequest request) =>
+{
+    if (!orders.TryGetValue(id, out var order))
+    {
+        return HttpResults.NotFound("Order", id);
+    }
+
+    orders[id] = order with { PaymentId = request.PaymentId, PaidAmount = request.Amount, PaidAt = DateTimeOffset.UtcNow };
     return Results.Ok(orders[id]);
 });
 
@@ -200,6 +221,36 @@ static async Task MarkResourcesInUseAsync(Guid tableId, Guid hookahId, IHttpClie
     hookahResponse.EnsureSuccessStatusCode();
 }
 
+static async Task<ResourceAvailabilityResult> CheckResourcesAvailableAsync(Guid tableId, Guid hookahId, IHttpClientFactory httpClientFactory, IConfiguration configuration, CancellationToken cancellationToken)
+{
+    var branchBaseUrl = configuration["Services:branch-service:BaseUrl"] ?? "http://branch-service:8080";
+    var client = httpClientFactory.CreateClient("order-service");
+
+    var table = await client.GetFromJsonAsync<TableDto>($"{branchBaseUrl}/api/tables/{tableId}", cancellationToken);
+    if (table is null || !table.IsActive)
+    {
+        return new(false, "Table is inactive or does not exist.");
+    }
+
+    if (!string.Equals(table.Status, "FREE", StringComparison.OrdinalIgnoreCase))
+    {
+        return new(false, "Table is not free.");
+    }
+
+    var hookah = await client.GetFromJsonAsync<HookahDto>($"{branchBaseUrl}/api/hookahs/{hookahId}", cancellationToken);
+    if (hookah is null)
+    {
+        return new(false, "Hookah does not exist.");
+    }
+
+    if (!string.Equals(hookah.Status, HookahStatuses.Available, StringComparison.OrdinalIgnoreCase))
+    {
+        return new(false, "Hookah is not available.");
+    }
+
+    return new(true, "Resources are available.");
+}
+
 static async Task ReleaseResourcesAsync(Guid tableId, Guid hookahId, IHttpClientFactory httpClientFactory, IConfiguration configuration, CancellationToken cancellationToken)
 {
     var branchBaseUrl = configuration["Services:branch-service:BaseUrl"] ?? "http://branch-service:8080";
@@ -232,7 +283,7 @@ static async Task<InventoryAvailabilityResponse> CheckMixAvailabilityAsync(Guid 
     return (await response.Content.ReadFromJsonAsync<InventoryAvailabilityResponse>(cancellationToken))!;
 }
 
-public sealed record HookahOrder(Guid Id, Guid BranchId, Guid TableId, Guid? ClientId, Guid? HookahMasterId, Guid? WaiterId, Guid? BookingId, string Status, decimal TotalPrice, string? Comment, DateTimeOffset CreatedAt, DateTimeOffset? ServedAt, DateTimeOffset? CompletedAt, DateTimeOffset? NextCoalChangeAt, IReadOnlyCollection<OrderItem> Items);
+public sealed record HookahOrder(Guid Id, Guid BranchId, Guid TableId, Guid? ClientId, Guid? HookahMasterId, Guid? WaiterId, Guid? BookingId, string Status, decimal TotalPrice, string? Comment, DateTimeOffset CreatedAt, DateTimeOffset? ServedAt, DateTimeOffset? CompletedAt, DateTimeOffset? NextCoalChangeAt, Guid? PaymentId, decimal PaidAmount, DateTimeOffset? PaidAt, IReadOnlyCollection<OrderItem> Items);
 public sealed record OrderItem(Guid Id, Guid OrderId, Guid HookahId, Guid BowlId, Guid MixId, decimal Price, string Status);
 public sealed record CoalChange(Guid Id, Guid OrderId, DateTimeOffset ChangedAt);
 public sealed record CreateOrderRequest(Guid BranchId, Guid TableId, Guid? ClientId, Guid HookahId, Guid BowlId, Guid MixId, Guid? BookingId, Guid? WaiterId, decimal? Price, string? Comment);
@@ -240,6 +291,7 @@ public sealed record UpdateOrderStatusRequest(string Status);
 public sealed record AssignHookahMasterRequest(Guid HookahMasterId);
 public sealed record CoalChangeRequest(DateTimeOffset? ChangedAt);
 public sealed record CancelOrderRequest(string Reason);
+public sealed record OrderPaymentSucceededRequest(Guid PaymentId, decimal Amount);
 public sealed record MixDto(Guid Id, Guid BowlId, IReadOnlyCollection<MixItemDto> Items);
 public sealed record MixItemDto(Guid Id, Guid TobaccoId, decimal Percent, decimal Grams);
 public sealed record InventoryAvailabilityRequest(Guid BranchId, IReadOnlyCollection<InventoryAvailabilityRequestItem> Items);
@@ -249,3 +301,6 @@ public sealed record InventoryAvailabilityItem(Guid TobaccoId, decimal RequiredG
 public sealed record InventoryOutRequest(Guid BranchId, Guid TobaccoId, decimal AmountGrams, string Reason, Guid? OrderId, Guid? CreatedBy);
 public sealed record UpdateTableStatusRequest(string Status);
 public sealed record UpdateHookahStatusRequest(string Status);
+public sealed record TableDto(Guid Id, Guid HallId, Guid? ZoneId, string Name, int Capacity, string Status, decimal XPosition, decimal YPosition, bool IsActive);
+public sealed record HookahDto(Guid Id, Guid BranchId, string Name, string Brand, string Model, string Status);
+public sealed record ResourceAvailabilityResult(bool IsAvailable, string Message);

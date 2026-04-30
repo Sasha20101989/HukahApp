@@ -36,6 +36,7 @@ export type CreatePaymentPayload = {
   currency: "RUB";
   type: "DEPOSIT";
   provider: "YOOKASSA";
+  promocode?: string;
 };
 
 export async function createBooking(payload: CreateBookingPayload) {
@@ -43,7 +44,7 @@ export async function createBooking(payload: CreateBookingPayload) {
 }
 
 export async function createDepositPayment(payload: CreatePaymentPayload) {
-  return postJson<{ paymentId: string; paymentUrl: string }>("/api/payments/create", payload);
+  return postJson<{ paymentId: string; paymentUrl: string; amount: number; discount: number }>("/api/payments/create", payload);
 }
 
 async function postJson<T>(path: string, payload: unknown): Promise<T> {
