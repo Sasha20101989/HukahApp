@@ -1,8 +1,10 @@
 using HookahPlatform.BuildingBlocks;
 using HookahPlatform.Contracts;
+using System.Net.Http.Json;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.AddHookahServiceDefaults("mixology-service");
+builder.Services.AddHttpClient();
 
 var app = builder.Build();
 app.UseHookahServiceDefaults();
@@ -118,7 +120,7 @@ app.MapDelete("/api/tobaccos/{id:guid}", (Guid id) =>
     return Results.NoContent();
 });
 
-app.MapGet("/api/mixes", (string? strength, string? tasteProfile, Guid? bowlId, bool? availableOnly, Guid? branchId, bool? publicOnly) =>
+app.MapGet("/api/mixes", async (string? strength, string? tasteProfile, Guid? bowlId, bool? availableOnly, Guid? branchId, bool? publicOnly, IHttpClientFactory httpClientFactory, IConfiguration configuration, CancellationToken cancellationToken) =>
 {
     var query = mixes.Values.AsEnumerable();
     if (!string.IsNullOrWhiteSpace(strength))
@@ -140,9 +142,17 @@ app.MapGet("/api/mixes", (string? strength, string? tasteProfile, Guid? bowlId, 
     if (availableOnly == true)
     {
         query = query.Where(mix => mix.IsActive && mix.Items.All(item => tobaccos.TryGetValue(item.TobaccoId, out var tobacco) && tobacco.IsActive));
+
+        if (branchId is not null)
+        {
+            query = await FilterAvailableMixesAsync(branchId.Value, query.ToArray(), httpClientFactory, configuration, cancellationToken);
+        }
     }
 
-    return Results.Ok(query.OrderBy(mix => mix.Name));
+    var ordered = query.OrderBy(mix => mix.Name).ToArray();
+    return publicOnly == true
+        ? (IResult)Results.Ok(ordered.Select(ToPublicMix))
+        : Results.Ok(ordered);
 });
 
 app.MapGet("/api/mixes/{id:guid}", (Guid id) =>
@@ -245,6 +255,45 @@ app.MapDelete("/api/mixes/{id:guid}", (Guid id) =>
 
 app.Run();
 
+static PublicMix ToPublicMix(Mix mix)
+{
+    return new PublicMix(
+        mix.Id,
+        mix.Name,
+        mix.Description,
+        mix.BowlId,
+        mix.Strength,
+        mix.TasteProfile,
+        mix.TotalGrams,
+        mix.Price,
+        mix.IsPublic,
+        mix.Items);
+}
+
+static async Task<IEnumerable<Mix>> FilterAvailableMixesAsync(Guid branchId, IReadOnlyCollection<Mix> mixes, IHttpClientFactory httpClientFactory, IConfiguration configuration, CancellationToken cancellationToken)
+{
+    var inventoryBaseUrl = configuration["Services:inventory-service:BaseUrl"] ?? "http://inventory-service:8080";
+    var client = httpClientFactory.CreateClient("mixology-service");
+    var available = new List<Mix>();
+
+    foreach (var mix in mixes)
+    {
+        var response = await client.PostAsJsonAsync(
+            $"{inventoryBaseUrl}/api/inventory/check",
+            new InventoryAvailabilityRequest(branchId, mix.Items.Select(item => new InventoryAvailabilityRequestItem(item.TobaccoId, item.Grams)).ToArray()),
+            cancellationToken);
+
+        response.EnsureSuccessStatusCode();
+        var availability = await response.Content.ReadFromJsonAsync<InventoryAvailabilityResponse>(cancellationToken);
+        if (availability?.IsAvailable == true)
+        {
+            available.Add(mix);
+        }
+    }
+
+    return available;
+}
+
 static CalculationResult CalculateMix(Guid bowlId, IReadOnlyCollection<MixInputItem> items, IReadOnlyDictionary<Guid, Bowl> bowls, IReadOnlyDictionary<Guid, Tobacco> tobaccos)
 {
     if (!bowls.TryGetValue(bowlId, out var bowl) || !bowl.IsActive)
@@ -309,6 +358,7 @@ public sealed record Bowl(Guid Id, string Name, string Type, decimal CapacityGra
 public sealed record Tobacco(Guid Id, string Brand, string Line, string Flavor, string Strength, string Category, string? Description, decimal CostPerGram, bool IsActive, string? PhotoUrl);
 public sealed record Mix(Guid Id, string Name, string? Description, Guid BowlId, string Strength, string TasteProfile, decimal TotalGrams, decimal Price, decimal Cost, decimal Margin, bool IsPublic, bool IsActive, Guid? CreatedBy, DateTimeOffset CreatedAt, IReadOnlyCollection<MixItem> Items);
 public sealed record MixItem(Guid Id, Guid TobaccoId, decimal Percent, decimal Grams);
+public sealed record PublicMix(Guid Id, string Name, string? Description, Guid BowlId, string Strength, string TasteProfile, decimal TotalGrams, decimal Price, bool IsPublic, IReadOnlyCollection<MixItem> Items);
 public sealed record CreateBowlRequest(string Name, string Type, decimal CapacityGrams, string RecommendedStrength, int AverageSmokeMinutes);
 public sealed record UpdateBowlRequest(string? Name, string? Type, decimal? CapacityGrams, string? RecommendedStrength, int? AverageSmokeMinutes, bool? IsActive);
 public sealed record CreateTobaccoRequest(string Brand, string Line, string Flavor, string Strength, string Category, string? Description, decimal CostPerGram, string? PhotoUrl);
@@ -322,3 +372,7 @@ public sealed record UpdateMixVisibilityRequest(bool IsPublic);
 public sealed record CalculatedMix(decimal TotalGrams, decimal Cost, IReadOnlyCollection<CalculatedMixItem> Items);
 public sealed record CalculatedMixItem(Guid TobaccoId, decimal Percent, decimal Grams);
 public sealed record CalculationResult(string? Error, CalculatedMix? Value);
+public sealed record InventoryAvailabilityRequest(Guid BranchId, IReadOnlyCollection<InventoryAvailabilityRequestItem> Items);
+public sealed record InventoryAvailabilityRequestItem(Guid TobaccoId, decimal RequiredGrams);
+public sealed record InventoryAvailabilityResponse(Guid BranchId, bool IsAvailable, IReadOnlyCollection<InventoryAvailabilityItem> Items);
+public sealed record InventoryAvailabilityItem(Guid TobaccoId, decimal RequiredGrams, decimal StockGrams, bool IsAvailable, decimal ShortageGrams);

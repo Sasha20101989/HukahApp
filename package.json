@@ -1,0 +1,15 @@
+{
+  "name": "hookah-platform",
+  "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "workspaces": [
+    "frontend/crm-app",
+    "frontend/client-app"
+  ],
+  "scripts": {
+    "crm:dev": "pnpm --dir frontend/crm-app dev",
+    "client:dev": "pnpm --dir frontend/client-app dev",
+    "frontend:lint": "pnpm --dir frontend/crm-app lint && pnpm --dir frontend/client-app lint",
+    "frontend:build": "pnpm --dir frontend/crm-app build && pnpm --dir frontend/client-app build"
+  }
+}

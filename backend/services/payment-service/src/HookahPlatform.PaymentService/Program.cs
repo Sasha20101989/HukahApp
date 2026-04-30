@@ -1,8 +1,10 @@
 using HookahPlatform.BuildingBlocks;
 using HookahPlatform.Contracts;
+using System.Net.Http.Json;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.AddHookahServiceDefaults("payment-service");
+builder.Services.AddHttpClient();
 
 var app = builder.Build();
 app.UseHookahServiceDefaults();
@@ -16,7 +18,7 @@ app.MapPost("/api/payments/create", (CreatePaymentRequest request) =>
         return HttpResults.Validation("Payment amount must be positive.");
     }
 
-    var payment = new Payment(Guid.NewGuid(), request.ClientId, request.OrderId, request.BookingId, request.Amount, request.Currency, request.Provider, null, "PENDING", request.Type, DateTimeOffset.UtcNow);
+    var payment = new Payment(Guid.NewGuid(), request.ClientId, request.OrderId, request.BookingId, request.Amount, request.Currency, request.Provider, null, PaymentStatuses.Pending, request.Type, DateTimeOffset.UtcNow);
     payments[payment.Id] = payment;
 
     return Results.Ok(new
@@ -26,14 +28,14 @@ app.MapPost("/api/payments/create", (CreatePaymentRequest request) =>
     });
 });
 
-app.MapPost("/api/payments/webhook/yookassa", async (YooKassaWebhook request, IEventPublisher events) =>
+app.MapPost("/api/payments/webhook/yookassa", async (YooKassaWebhook request, IEventPublisher events, IHttpClientFactory httpClientFactory, IConfiguration configuration, CancellationToken cancellationToken) =>
 {
     if (!payments.TryGetValue(request.PaymentId, out var payment))
     {
         return HttpResults.NotFound("Payment", request.PaymentId);
     }
 
-    var status = request.Succeeded ? "SUCCESS" : "FAILED";
+    var status = request.Succeeded ? PaymentStatuses.Success : PaymentStatuses.Failed;
     var updated = payment with { Status = status, ExternalPaymentId = request.ExternalPaymentId };
     payments[payment.Id] = updated;
 
@@ -43,6 +45,7 @@ app.MapPost("/api/payments/webhook/yookassa", async (YooKassaWebhook request, IE
         if (payment.BookingId is not null)
         {
             await events.PublishAsync(new BookingPaid(payment.BookingId.Value, payment.Id, payment.Amount, DateTimeOffset.UtcNow));
+            await ConfirmBookingDepositAsync(payment.BookingId.Value, payment.Id, payment.Amount, httpClientFactory, configuration, cancellationToken);
         }
     }
     else
@@ -68,14 +71,27 @@ app.MapPost("/api/payments/{id:guid}/refund", (Guid id, RefundRequest request) =
         return HttpResults.Validation("Refund amount must be positive and cannot exceed payment amount.");
     }
 
-    var status = request.Amount == payment.Amount ? "REFUNDED" : "PARTIALLY_REFUNDED";
+    var status = request.Amount == payment.Amount ? PaymentStatuses.Refunded : PaymentStatuses.PartiallyRefunded;
     payments[id] = payment with { Status = status };
     return Results.Ok(new { paymentId = id, status, request.Amount, request.Reason });
 });
 
 app.Run();
 
+static async Task ConfirmBookingDepositAsync(Guid bookingId, Guid paymentId, decimal amount, IHttpClientFactory httpClientFactory, IConfiguration configuration, CancellationToken cancellationToken)
+{
+    var baseUrl = configuration["Services:booking-service:BaseUrl"] ?? "http://booking-service:8080";
+    var client = httpClientFactory.CreateClient("booking-service");
+    var response = await client.PatchAsJsonAsync(
+        $"{baseUrl}/api/bookings/{bookingId}/payment-succeeded",
+        new BookingPaymentSucceededRequest(paymentId, amount),
+        cancellationToken);
+
+    response.EnsureSuccessStatusCode();
+}
+
 public sealed record Payment(Guid Id, Guid ClientId, Guid? OrderId, Guid? BookingId, decimal Amount, string Currency, string Provider, string? ExternalPaymentId, string Status, string Type, DateTimeOffset CreatedAt);
 public sealed record CreatePaymentRequest(Guid ClientId, Guid? OrderId, Guid? BookingId, decimal Amount, string Currency, string Type, string Provider);
 public sealed record YooKassaWebhook(Guid PaymentId, string ExternalPaymentId, bool Succeeded, string? Reason);
 public sealed record RefundRequest(decimal Amount, string Reason);
+public sealed record BookingPaymentSucceededRequest(Guid PaymentId, decimal Amount);

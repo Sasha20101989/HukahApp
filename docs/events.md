@@ -2,6 +2,8 @@
 
 Events are defined in `backend/shared/contracts/src/HookahPlatform.Contracts/DomainEvents.cs`.
 
+RabbitMQ routing metadata is defined in `backend/shared/contracts/src/HookahPlatform.Contracts/MessagingCatalog.cs`.
+
 Implemented event contracts:
 
 - `UserRegistered`
@@ -19,4 +21,4 @@ Implemented event contracts:
 - `ReviewCreated`
 - `MixCreated`
 
-The current publisher is in-memory for local smoke testing. Replace `IEventPublisher` with a RabbitMQ implementation when durable messaging is added.
+`IEventPublisher` is the application boundary for event delivery. The current local implementation records events for diagnostics; RabbitMQ delivery should be added behind the same interface so service code does not depend on transport details.

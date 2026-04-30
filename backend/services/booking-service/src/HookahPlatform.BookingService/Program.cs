@@ -12,15 +12,21 @@ var tables = new Dictionary<Guid, BookingTable>
     [Guid.Parse("30000000-0000-0000-0000-000000000001")] = new(Guid.Parse("30000000-0000-0000-0000-000000000001"), Guid.Parse("10000000-0000-0000-0000-000000000001"), 4, true),
     [Guid.Parse("30000000-0000-0000-0000-000000000002")] = new(Guid.Parse("30000000-0000-0000-0000-000000000002"), Guid.Parse("10000000-0000-0000-0000-000000000001"), 6, true)
 };
+var workingHours = SeedWorkingHours();
 var bookings = new Dictionary<Guid, Booking>();
 
 app.MapGet("/api/bookings/availability", (Guid branchId, DateOnly date, TimeOnly time, int guestsCount) =>
 {
     var start = new DateTimeOffset(date.ToDateTime(time), TimeSpan.Zero);
     var end = start.AddHours(2);
+    if (!BranchIsOpen(branchId, start, end, workingHours))
+    {
+        return Results.Ok(Array.Empty<BookingTable>());
+    }
+
     var available = tables.Values
         .Where(table => table.BranchId == branchId && table.IsActive && table.Capacity >= guestsCount)
-        .Where(table => bookings.Values.All(booking => booking.TableId != table.Id || booking.Status is "CANCELLED" or "NO_SHOW" || !DomainRules.Intersects(start, end, booking.StartTime, booking.EndTime)))
+        .Where(table => bookings.Values.All(booking => booking.TableId != table.Id || booking.Status is BookingStatuses.Cancelled or BookingStatuses.NoShow || !DomainRules.Intersects(start, end, booking.StartTime, booking.EndTime)))
         .OrderBy(table => table.Capacity);
 
     return Results.Ok(available);
@@ -38,9 +44,14 @@ app.MapPost("/api/bookings", async (CreateBookingRequest request, IEventPublishe
         return HttpResults.Validation("Table capacity is less than guests count.");
     }
 
+    if (!BranchIsOpen(request.BranchId, request.StartTime, request.EndTime, workingHours))
+    {
+        return HttpResults.Validation("Branch is closed for the requested booking time.");
+    }
+
     var intersects = bookings.Values.Any(booking =>
         booking.TableId == request.TableId &&
-        booking.Status is not "CANCELLED" and not "NO_SHOW" &&
+        booking.Status is not BookingStatuses.Cancelled and not BookingStatuses.NoShow &&
         DomainRules.Intersects(request.StartTime, request.EndTime, booking.StartTime, booking.EndTime));
 
     if (intersects)
@@ -48,12 +59,12 @@ app.MapPost("/api/bookings", async (CreateBookingRequest request, IEventPublishe
         return HttpResults.Conflict("Booking time intersects with an existing booking.");
     }
 
-    var status = request.DepositAmount > 0 ? "WAITING_PAYMENT" : "CONFIRMED";
-    var booking = new Booking(Guid.NewGuid(), request.ClientId, request.BranchId, request.TableId, request.HookahId, request.BowlId, request.MixId, request.StartTime, request.EndTime, request.GuestsCount, status, request.DepositAmount, request.Comment, DateTimeOffset.UtcNow);
+    var status = request.DepositAmount > 0 ? BookingStatuses.WaitingPayment : BookingStatuses.Confirmed;
+    var booking = new Booking(Guid.NewGuid(), request.ClientId, request.BranchId, request.TableId, request.HookahId, request.BowlId, request.MixId, request.StartTime, request.EndTime, request.GuestsCount, status, request.DepositAmount, null, null, request.Comment, DateTimeOffset.UtcNow);
     bookings[booking.Id] = booking;
 
     await events.PublishAsync(new BookingCreated(booking.Id, booking.BranchId, booking.TableId, booking.ClientId, booking.StartTime, booking.EndTime, DateTimeOffset.UtcNow));
-    if (status == "CONFIRMED")
+    if (status == BookingStatuses.Confirmed)
     {
         await events.PublishAsync(new BookingConfirmed(booking.Id, DateTimeOffset.UtcNow));
     }
@@ -90,8 +101,39 @@ app.MapPatch("/api/bookings/{id:guid}/confirm", async (Guid id, IEventPublisher 
         return HttpResults.NotFound("Booking", id);
     }
 
-    bookings[id] = booking with { Status = "CONFIRMED" };
+    if (booking.DepositAmount > 0 && booking.DepositPaidAt is null)
+    {
+        return HttpResults.Conflict("Booking with required deposit cannot be confirmed before payment.");
+    }
+
+    bookings[id] = booking with { Status = BookingStatuses.Confirmed };
     await events.PublishAsync(new BookingConfirmed(id, DateTimeOffset.UtcNow));
+    return Results.Ok(bookings[id]);
+});
+
+app.MapPatch("/api/bookings/{id:guid}/payment-succeeded", async (Guid id, BookingPaymentSucceededRequest request, IEventPublisher events) =>
+{
+    if (!bookings.TryGetValue(id, out var booking))
+    {
+        return HttpResults.NotFound("Booking", id);
+    }
+
+    if (request.Amount < booking.DepositAmount)
+    {
+        return HttpResults.Validation("Payment amount is less than required deposit.");
+    }
+
+    var paidAt = DateTimeOffset.UtcNow;
+    bookings[id] = booking with
+    {
+        Status = BookingStatuses.Confirmed,
+        PaymentId = request.PaymentId,
+        DepositPaidAt = paidAt
+    };
+
+    await events.PublishAsync(new BookingPaid(id, request.PaymentId, request.Amount, paidAt));
+    await events.PublishAsync(new BookingConfirmed(id, DateTimeOffset.UtcNow));
+
     return Results.Ok(bookings[id]);
 });
 
@@ -102,7 +144,7 @@ app.MapPatch("/api/bookings/{id:guid}/cancel", async (Guid id, CancelBookingRequ
         return HttpResults.NotFound("Booking", id);
     }
 
-    bookings[id] = booking with { Status = "CANCELLED" };
+    bookings[id] = booking with { Status = BookingStatuses.Cancelled };
     await events.PublishAsync(new BookingCancelled(id, request.Reason, DateTimeOffset.UtcNow));
     return Results.Ok(bookings[id]);
 });
@@ -117,7 +159,7 @@ app.MapPatch("/api/bookings/{id:guid}/reschedule", (Guid id, RescheduleBookingRe
     var intersects = bookings.Values.Any(existing =>
         existing.Id != id &&
         existing.TableId == request.TableId &&
-        existing.Status is not "CANCELLED" and not "NO_SHOW" &&
+        existing.Status is not BookingStatuses.Cancelled and not BookingStatuses.NoShow &&
         DomainRules.Intersects(request.StartTime, request.EndTime, existing.StartTime, existing.EndTime));
 
     if (intersects)
@@ -136,14 +178,46 @@ app.MapPatch("/api/bookings/{id:guid}/no-show", (Guid id) =>
         return HttpResults.NotFound("Booking", id);
     }
 
-    bookings[id] = booking with { Status = "NO_SHOW" };
+    bookings[id] = booking with { Status = BookingStatuses.NoShow };
     return Results.Ok(bookings[id]);
 });
 
 app.Run();
 
+static Dictionary<(Guid BranchId, DayOfWeek DayOfWeek), BranchWorkingHours> SeedWorkingHours()
+{
+    var branchId = Guid.Parse("10000000-0000-0000-0000-000000000001");
+    var result = new Dictionary<(Guid BranchId, DayOfWeek DayOfWeek), BranchWorkingHours>();
+    foreach (var day in Enum.GetValues<DayOfWeek>())
+    {
+        result[(branchId, day)] = new BranchWorkingHours(branchId, day, new TimeOnly(12, 0), new TimeOnly(2, 0), false);
+    }
+
+    return result;
+}
+
+static bool BranchIsOpen(Guid branchId, DateTimeOffset start, DateTimeOffset end, IReadOnlyDictionary<(Guid BranchId, DayOfWeek DayOfWeek), BranchWorkingHours> workingHours)
+{
+    if (!workingHours.TryGetValue((branchId, start.DayOfWeek), out var hours) || hours.IsClosed)
+    {
+        return false;
+    }
+
+    var startTime = TimeOnly.FromDateTime(start.DateTime);
+    var endTime = TimeOnly.FromDateTime(end.DateTime);
+
+    if (hours.ClosesAt > hours.OpensAt)
+    {
+        return startTime >= hours.OpensAt && endTime <= hours.ClosesAt;
+    }
+
+    return startTime >= hours.OpensAt || endTime <= hours.ClosesAt;
+}
+
 public sealed record BookingTable(Guid Id, Guid BranchId, int Capacity, bool IsActive);
-public sealed record Booking(Guid Id, Guid ClientId, Guid BranchId, Guid TableId, Guid? HookahId, Guid? BowlId, Guid? MixId, DateTimeOffset StartTime, DateTimeOffset EndTime, int GuestsCount, string Status, decimal DepositAmount, string? Comment, DateTimeOffset CreatedAt);
+public sealed record BranchWorkingHours(Guid BranchId, DayOfWeek DayOfWeek, TimeOnly OpensAt, TimeOnly ClosesAt, bool IsClosed);
+public sealed record Booking(Guid Id, Guid ClientId, Guid BranchId, Guid TableId, Guid? HookahId, Guid? BowlId, Guid? MixId, DateTimeOffset StartTime, DateTimeOffset EndTime, int GuestsCount, string Status, decimal DepositAmount, Guid? PaymentId, DateTimeOffset? DepositPaidAt, string? Comment, DateTimeOffset CreatedAt);
 public sealed record CreateBookingRequest(Guid BranchId, Guid TableId, Guid ClientId, DateTimeOffset StartTime, DateTimeOffset EndTime, int GuestsCount, Guid? HookahId, Guid? BowlId, Guid? MixId, string? Comment, decimal DepositAmount);
+public sealed record BookingPaymentSucceededRequest(Guid PaymentId, decimal Amount);
 public sealed record CancelBookingRequest(string Reason);
 public sealed record RescheduleBookingRequest(DateTimeOffset StartTime, DateTimeOffset EndTime, Guid TableId);

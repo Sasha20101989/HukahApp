@@ -1,6 +1,6 @@
 # Hookah CRM Platform
 
-Executable monorepo skeleton for a hookah CRM/ERP platform.
+Executable monorepo foundation for a hookah CRM/ERP platform.
 
 ## Structure
 
@@ -26,3 +26,19 @@ rtk env DOTNET_CLI_HOME=/tmp dotnet run --project backend/services/mixology-serv
 ## Notes
 
 The local machine currently has .NET SDK 8.0, so projects target `net8.0`. The requested ASP.NET Core 9 upgrade should be done after installing SDK 9.
+
+The API Gateway is the public entrypoint at `http://localhost:8080`. Service containers communicate on the internal Docker network.
+
+## API Smoke Tests
+
+Use [docs/smoke-tests.http](docs/smoke-tests.http) after starting Docker Compose. Requests are written against the gateway.
+
+## Frontend
+
+```bash
+pnpm install
+pnpm crm:dev
+pnpm client:dev
+```
+
+CRM runs on `http://localhost:3000`. Client app runs on `http://localhost:3001`.

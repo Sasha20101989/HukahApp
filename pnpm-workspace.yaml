@@ -1,0 +1,3 @@
+packages:
+  - "frontend/crm-app"
+  - "frontend/client-app"

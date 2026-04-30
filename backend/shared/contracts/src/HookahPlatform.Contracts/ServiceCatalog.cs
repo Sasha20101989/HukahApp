@@ -17,6 +17,30 @@ public static class ServiceCatalog
         new("review-service", "/api/reviews", "Client reviews for orders and mixes"),
         new("promo-service", "/api/promocodes", "Promo code creation and validation")
     ];
+
+    public static readonly ServiceRoute[] Routes =
+    [
+        new("/api/auth", "auth-service"),
+        new("/api/users", "user-service"),
+        new("/api/staff", "user-service"),
+        new("/api/branches", "branch-service"),
+        new("/api/zones", "branch-service"),
+        new("/api/halls", "branch-service"),
+        new("/api/tables", "branch-service"),
+        new("/api/hookahs", "branch-service"),
+        new("/api/bowls", "mixology-service"),
+        new("/api/tobaccos", "mixology-service"),
+        new("/api/mixes", "mixology-service"),
+        new("/api/inventory", "inventory-service"),
+        new("/api/orders", "order-service"),
+        new("/api/bookings", "booking-service"),
+        new("/api/payments", "payment-service"),
+        new("/api/notifications", "notification-service"),
+        new("/api/analytics", "analytics-service"),
+        new("/api/reviews", "review-service"),
+        new("/api/promocodes", "promo-service")
+    ];
 }
 
 public sealed record ServiceDescriptor(string Code, string BasePath, string Responsibility);
+public sealed record ServiceRoute(string PathPrefix, string ServiceCode);

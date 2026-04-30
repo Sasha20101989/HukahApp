@@ -1,20 +1,24 @@
 # CRM App
 
-Placeholder for the staff CRM frontend.
+Next.js staff CRM for tablet-first venue operations.
 
-Target stack from the specification:
+Implemented screen:
 
-- Next.js
-- TypeScript
-- React Query
-- Zustand or MobX
-- TailwindCSS
-- shadcn/ui
-- PWA support
+- Active hookah order queue.
+- Floor plan with table states.
+- Upcoming bookings.
+- Low-stock indicators.
+- Mix margin overview.
 
-Primary workflows to implement first:
+Run:
 
-- Tablet-friendly order board.
-- Mixology editor with automatic grams calculation.
-- Inventory low-stock and movement views.
-- Booking calendar and table availability.
+```bash
+pnpm --dir frontend/crm-app install
+pnpm --dir frontend/crm-app dev
+```
+
+Environment:
+
+```bash
+NEXT_PUBLIC_API_BASE_URL=http://localhost:8080
+```

@@ -26,6 +26,33 @@ app.MapGet("/api/inventory", (Guid? branchId, bool? lowStockOnly) =>
     return Results.Ok(query.OrderBy(item => item.BranchId).ThenBy(item => item.TobaccoId));
 });
 
+app.MapPost("/api/inventory/check", (InventoryAvailabilityRequest request) =>
+{
+    if (request.Items.Count == 0)
+    {
+        return HttpResults.Validation("Availability check must contain at least one tobacco item.");
+    }
+
+    var checkedItems = request.Items.Select(required =>
+    {
+        var stock = items.TryGetValue((request.BranchId, required.TobaccoId), out var item)
+            ? item.StockGrams
+            : 0m;
+
+        return new InventoryAvailabilityItem(
+            required.TobaccoId,
+            required.RequiredGrams,
+            stock,
+            stock >= required.RequiredGrams,
+            Math.Max(0, required.RequiredGrams - stock));
+    }).ToArray();
+
+    return Results.Ok(new InventoryAvailabilityResponse(
+        request.BranchId,
+        checkedItems.All(item => item.IsAvailable),
+        checkedItems));
+});
+
 app.MapPost("/api/inventory/in", async (InventoryInRequest request, IEventPublisher events) =>
 {
     var item = GetOrCreateItem(items, request.BranchId, request.TobaccoId);
@@ -131,6 +158,10 @@ static void SeedInventory(IDictionary<(Guid BranchId, Guid TobaccoId), Inventory
 
 public sealed record InventoryItem(Guid Id, Guid BranchId, Guid TobaccoId, decimal StockGrams, decimal MinStockGrams, DateTimeOffset UpdatedAt);
 public sealed record InventoryMovement(Guid Id, Guid BranchId, Guid TobaccoId, string Type, decimal AmountGrams, string? Reason, Guid? OrderId, Guid? CreatedBy, DateTimeOffset CreatedAt);
+public sealed record InventoryAvailabilityRequest(Guid BranchId, IReadOnlyCollection<InventoryAvailabilityRequestItem> Items);
+public sealed record InventoryAvailabilityRequestItem(Guid TobaccoId, decimal RequiredGrams);
+public sealed record InventoryAvailabilityResponse(Guid BranchId, bool IsAvailable, IReadOnlyCollection<InventoryAvailabilityItem> Items);
+public sealed record InventoryAvailabilityItem(Guid TobaccoId, decimal RequiredGrams, decimal StockGrams, bool IsAvailable, decimal ShortageGrams);
 public sealed record InventoryInRequest(Guid BranchId, Guid TobaccoId, decimal AmountGrams, decimal CostPerGram, string? Supplier, string? Comment);
 public sealed record InventoryOutRequest(Guid BranchId, Guid TobaccoId, decimal AmountGrams, string Reason, Guid? OrderId, Guid? CreatedBy);
 public sealed record InventoryAdjustmentRequest(Guid BranchId, Guid TobaccoId, decimal NewStockGrams, Guid? CreatedBy);

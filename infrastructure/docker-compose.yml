@@ -8,6 +8,23 @@ services:
     command: ["HookahPlatform.ApiGateway.dll"]
     ports:
       - "8080:8080"
+    environment:
+      Jwt__Issuer: hookah-platform
+      Jwt__Audience: hookah-platform-clients
+      Jwt__Secret: change-this-secret-before-production-change-this-secret
+    depends_on:
+      - auth-service
+      - user-service
+      - branch-service
+      - mixology-service
+      - inventory-service
+      - order-service
+      - booking-service
+      - payment-service
+      - notification-service
+      - analytics-service
+      - review-service
+      - promo-service
 
   auth-service:
     build:
@@ -16,6 +33,10 @@ services:
       args:
         PROJECT_PATH: services/auth-service/src/HookahPlatform.AuthService/HookahPlatform.AuthService.csproj
     command: ["HookahPlatform.AuthService.dll"]
+    environment:
+      Jwt__Issuer: hookah-platform
+      Jwt__Audience: hookah-platform-clients
+      Jwt__Secret: change-this-secret-before-production-change-this-secret
 
   user-service:
     build:
@@ -40,6 +61,8 @@ services:
       args:
         PROJECT_PATH: services/mixology-service/src/HookahPlatform.MixologyService/HookahPlatform.MixologyService.csproj
     command: ["HookahPlatform.MixologyService.dll"]
+    environment:
+      Services__inventory-service__BaseUrl: http://inventory-service:8080
 
   inventory-service:
     build:
@@ -56,6 +79,10 @@ services:
       args:
         PROJECT_PATH: services/order-service/src/HookahPlatform.OrderService/HookahPlatform.OrderService.csproj
     command: ["HookahPlatform.OrderService.dll"]
+    environment:
+      Services__mixology-service__BaseUrl: http://mixology-service:8080
+      Services__inventory-service__BaseUrl: http://inventory-service:8080
+      Services__branch-service__BaseUrl: http://branch-service:8080
 
   booking-service:
     build:
@@ -72,6 +99,8 @@ services:
       args:
         PROJECT_PATH: services/payment-service/src/HookahPlatform.PaymentService/HookahPlatform.PaymentService.csproj
     command: ["HookahPlatform.PaymentService.dll"]
+    environment:
+      Services__booking-service__BaseUrl: http://booking-service:8080
 
   notification-service:
     build:
@@ -113,6 +142,8 @@ services:
       POSTGRES_PASSWORD: hookah
     ports:
       - "5432:5432"
+    volumes:
+      - ./postgres/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
 
   redis:
     image: redis:7
@@ -121,6 +152,10 @@ services:
 
   rabbitmq:
     image: rabbitmq:3-management
+    environment:
+      RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: -rabbitmq_management load_definitions "/etc/rabbitmq/definitions.json"
     ports:
       - "5672:5672"
       - "15672:15672"
+    volumes:
+      - ./rabbitmq/definitions.json:/etc/rabbitmq/definitions.json:ro

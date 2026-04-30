@@ -1,4 +1,5 @@
 using HookahPlatform.Contracts;
+using HookahPlatform.BuildingBlocks.Security;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
@@ -11,6 +12,7 @@ public static class ApiDefaults
     {
         builder.Services.AddSingleton(new ServiceInfo(serviceName));
         builder.Services.AddSingleton<IEventPublisher, InMemoryEventPublisher>();
+        builder.Services.AddSingleton<JwtTokenService>();
         builder.Services.AddCors(options =>
         {
             options.AddDefaultPolicy(policy => policy.AllowAnyHeader().AllowAnyMethod().AllowAnyOrigin());

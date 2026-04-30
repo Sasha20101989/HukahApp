@@ -1,4 +1,5 @@
 using HookahPlatform.BuildingBlocks;
+using HookahPlatform.Contracts;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.AddHookahServiceDefaults("branch-service");
@@ -8,9 +9,11 @@ app.UseHookahServiceDefaults();
 
 var branches = new Dictionary<Guid, Branch>();
 var halls = new Dictionary<Guid, Hall>();
+var zones = new Dictionary<Guid, Zone>();
 var tables = new Dictionary<Guid, TableSeat>();
 var hookahs = new Dictionary<Guid, Hookah>();
-SeedBranches(branches, halls, tables, hookahs);
+var workingHours = new Dictionary<(Guid BranchId, DayOfWeek DayOfWeek), BranchWorkingHours>();
+SeedBranches(branches, halls, zones, tables, hookahs, workingHours);
 
 app.MapGet("/api/branches", () => Results.Ok(branches.Values.OrderBy(branch => branch.Name)));
 
@@ -43,8 +46,72 @@ app.MapPatch("/api/branches/{id:guid}", (Guid id, UpdateBranchRequest request) =
     return Results.Ok(updated);
 });
 
+app.MapGet("/api/branches/{id:guid}/working-hours", (Guid id) =>
+{
+    if (!branches.ContainsKey(id))
+    {
+        return HttpResults.NotFound("Branch", id);
+    }
+
+    return Results.Ok(workingHours.Values.Where(hours => hours.BranchId == id).OrderBy(hours => hours.DayOfWeek));
+});
+
+app.MapPut("/api/branches/{id:guid}/working-hours", (Guid id, IReadOnlyCollection<UpdateBranchWorkingHoursRequest> request) =>
+{
+    if (!branches.ContainsKey(id))
+    {
+        return HttpResults.NotFound("Branch", id);
+    }
+
+    foreach (var item in request)
+    {
+        workingHours[(id, item.DayOfWeek)] = new BranchWorkingHours(id, item.DayOfWeek, item.OpensAt, item.ClosesAt, item.IsClosed);
+    }
+
+    return Results.Ok(workingHours.Values.Where(hours => hours.BranchId == id).OrderBy(hours => hours.DayOfWeek));
+});
+
 app.MapGet("/api/branches/{id:guid}/halls", (Guid id) =>
     Results.Ok(halls.Values.Where(hall => hall.BranchId == id).OrderBy(hall => hall.Name)));
+
+app.MapGet("/api/branches/{id:guid}/zones", (Guid id) =>
+{
+    if (!branches.ContainsKey(id))
+    {
+        return HttpResults.NotFound("Branch", id);
+    }
+
+    return Results.Ok(zones.Values.Where(zone => zone.BranchId == id).OrderBy(zone => zone.Name));
+});
+
+app.MapGet("/api/branches/{id:guid}/floor-plan", (Guid id) =>
+{
+    if (!branches.ContainsKey(id))
+    {
+        return HttpResults.NotFound("Branch", id);
+    }
+
+    var branchHalls = halls.Values.Where(hall => hall.BranchId == id).OrderBy(hall => hall.Name).ToArray();
+    var hallIds = branchHalls.Select(hall => hall.Id).ToHashSet();
+
+    return Results.Ok(new FloorPlan(
+        id,
+        branchHalls,
+        zones.Values.Where(zone => zone.BranchId == id && zone.IsActive).OrderBy(zone => zone.Name).ToArray(),
+        tables.Values.Where(table => hallIds.Contains(table.HallId) && table.IsActive).OrderBy(table => table.Name).ToArray()));
+});
+
+app.MapPost("/api/zones", (CreateZoneRequest request) =>
+{
+    if (!branches.ContainsKey(request.BranchId))
+    {
+        return HttpResults.NotFound("Branch", request.BranchId);
+    }
+
+    var zone = new Zone(Guid.NewGuid(), request.BranchId, request.Name, request.Description, request.Color, true);
+    zones[zone.Id] = zone;
+    return Results.Created($"/api/zones/{zone.Id}", zone);
+});
 
 app.MapPost("/api/halls", (CreateHallRequest request) =>
 {
@@ -68,7 +135,12 @@ app.MapPost("/api/tables", (CreateTableRequest request) =>
         return HttpResults.NotFound("Hall", request.HallId);
     }
 
-    var table = new TableSeat(Guid.NewGuid(), request.HallId, request.Name, request.Capacity, "FREE", request.XPosition, request.YPosition, true);
+    if (request.ZoneId is not null && !zones.ContainsKey(request.ZoneId.Value))
+    {
+        return HttpResults.NotFound("Zone", request.ZoneId.Value);
+    }
+
+    var table = new TableSeat(Guid.NewGuid(), request.HallId, request.ZoneId, request.Name, request.Capacity, "FREE", request.XPosition, request.YPosition, true);
     tables[table.Id] = table;
     return Results.Created($"/api/tables/{table.Id}", table);
 });
@@ -124,25 +196,37 @@ app.MapPatch("/api/hookahs/{id:guid}/status", (Guid id, UpdateHookahStatusReques
 
 app.Run();
 
-static void SeedBranches(IDictionary<Guid, Branch> branches, IDictionary<Guid, Hall> halls, IDictionary<Guid, TableSeat> tables, IDictionary<Guid, Hookah> hookahs)
+static void SeedBranches(IDictionary<Guid, Branch> branches, IDictionary<Guid, Hall> halls, IDictionary<Guid, Zone> zones, IDictionary<Guid, TableSeat> tables, IDictionary<Guid, Hookah> hookahs, IDictionary<(Guid BranchId, DayOfWeek DayOfWeek), BranchWorkingHours> workingHours)
 {
     var branchId = Guid.Parse("10000000-0000-0000-0000-000000000001");
     var hallId = Guid.Parse("20000000-0000-0000-0000-000000000001");
+    var zoneId = Guid.Parse("21000000-0000-0000-0000-000000000001");
     branches[branchId] = new Branch(branchId, "Hookah Place Center", "Lenina, 1", "+79990000000", "Europe/Moscow", true, DateTimeOffset.UtcNow);
     halls[hallId] = new Hall(hallId, branchId, "Main hall", "First floor");
-    tables[Guid.Parse("30000000-0000-0000-0000-000000000001")] = new TableSeat(Guid.Parse("30000000-0000-0000-0000-000000000001"), hallId, "Table 1", 4, "FREE", 120, 300, true);
-    tables[Guid.Parse("30000000-0000-0000-0000-000000000002")] = new TableSeat(Guid.Parse("30000000-0000-0000-0000-000000000002"), hallId, "Table 2", 6, "FREE", 260, 300, true);
-    hookahs[Guid.Parse("40000000-0000-0000-0000-000000000001")] = new Hookah(Guid.Parse("40000000-0000-0000-0000-000000000001"), branchId, "Alpha X", "Alpha Hookah", "X", "AVAILABLE", null, null);
+    zones[zoneId] = new Zone(zoneId, branchId, "Main zone", "Central seating area", "#2f7d6d", true);
+    tables[Guid.Parse("30000000-0000-0000-0000-000000000001")] = new TableSeat(Guid.Parse("30000000-0000-0000-0000-000000000001"), hallId, zoneId, "Table 1", 4, "FREE", 120, 300, true);
+    tables[Guid.Parse("30000000-0000-0000-0000-000000000002")] = new TableSeat(Guid.Parse("30000000-0000-0000-0000-000000000002"), hallId, zoneId, "Table 2", 6, "FREE", 260, 300, true);
+    hookahs[Guid.Parse("40000000-0000-0000-0000-000000000001")] = new Hookah(Guid.Parse("40000000-0000-0000-0000-000000000001"), branchId, "Alpha X", "Alpha Hookah", "X", HookahStatuses.Available, null, null);
+
+    foreach (var day in Enum.GetValues<DayOfWeek>())
+    {
+        workingHours[(branchId, day)] = new BranchWorkingHours(branchId, day, new TimeOnly(12, 0), new TimeOnly(2, 0), false);
+    }
 }
 
 public sealed record Branch(Guid Id, string Name, string Address, string Phone, string Timezone, bool IsActive, DateTimeOffset CreatedAt);
 public sealed record Hall(Guid Id, Guid BranchId, string Name, string? Description);
-public sealed record TableSeat(Guid Id, Guid HallId, string Name, int Capacity, string Status, decimal XPosition, decimal YPosition, bool IsActive);
+public sealed record Zone(Guid Id, Guid BranchId, string Name, string? Description, string? Color, bool IsActive);
+public sealed record TableSeat(Guid Id, Guid HallId, Guid? ZoneId, string Name, int Capacity, string Status, decimal XPosition, decimal YPosition, bool IsActive);
 public sealed record Hookah(Guid Id, Guid BranchId, string Name, string Brand, string Model, string Status, string? PhotoUrl, DateTimeOffset? LastServiceAt);
+public sealed record BranchWorkingHours(Guid BranchId, DayOfWeek DayOfWeek, TimeOnly OpensAt, TimeOnly ClosesAt, bool IsClosed);
+public sealed record FloorPlan(Guid BranchId, IReadOnlyCollection<Hall> Halls, IReadOnlyCollection<Zone> Zones, IReadOnlyCollection<TableSeat> Tables);
 public sealed record CreateBranchRequest(string Name, string Address, string Phone, string Timezone);
 public sealed record UpdateBranchRequest(string? Name, string? Address, string? Phone, string? Timezone, bool? IsActive);
+public sealed record UpdateBranchWorkingHoursRequest(DayOfWeek DayOfWeek, TimeOnly OpensAt, TimeOnly ClosesAt, bool IsClosed);
+public sealed record CreateZoneRequest(Guid BranchId, string Name, string? Description, string? Color);
 public sealed record CreateHallRequest(Guid BranchId, string Name, string? Description);
-public sealed record CreateTableRequest(Guid HallId, string Name, int Capacity, decimal XPosition, decimal YPosition);
+public sealed record CreateTableRequest(Guid HallId, Guid? ZoneId, string Name, int Capacity, decimal XPosition, decimal YPosition);
 public sealed record UpdateTableStatusRequest(string Status);
 public sealed record CreateHookahRequest(Guid BranchId, string Name, string Brand, string Model, string Status, string? PhotoUrl);
 public sealed record UpdateHookahStatusRequest(string Status);

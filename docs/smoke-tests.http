@@ -1,0 +1,110 @@
+@gateway = http://localhost:8080
+
+### Gateway catalog
+GET {{gateway}}/api/catalog/services
+
+### Register client
+POST {{gateway}}/api/auth/register
+Content-Type: application/json
+
+{
+  "name": "Alexander",
+  "phone": "+79990000001",
+  "email": "client@hookah.local",
+  "password": "password"
+}
+
+### Login client
+POST {{gateway}}/api/auth/login
+Content-Type: application/json
+
+{
+  "phone": "+79990000001",
+  "password": "password"
+}
+
+### Branch floor plan
+GET {{gateway}}/api/branches/10000000-0000-0000-0000-000000000001/floor-plan
+
+### Staff shifts
+GET {{gateway}}/api/staff/shifts?branchId=10000000-0000-0000-0000-000000000001&from=2026-05-01&to=2026-05-02
+
+### Calculate mix grams
+POST {{gateway}}/api/mixes/calculate
+Content-Type: application/json
+
+{
+  "bowlId": "50000000-0000-0000-0000-000000000001",
+  "items": [
+    { "tobaccoId": "60000000-0000-0000-0000-000000000001", "percent": 50 },
+    { "tobaccoId": "60000000-0000-0000-0000-000000000002", "percent": 50 }
+  ]
+}
+
+### Check booking availability
+GET {{gateway}}/api/bookings/availability?branchId=10000000-0000-0000-0000-000000000001&date=2026-05-01&time=20:00&guestsCount=4
+
+### Check inventory for a mix
+POST {{gateway}}/api/inventory/check
+Content-Type: application/json
+
+{
+  "branchId": "10000000-0000-0000-0000-000000000001",
+  "items": [
+    { "tobaccoId": "60000000-0000-0000-0000-000000000001", "requiredGrams": 7.2 },
+    { "tobaccoId": "60000000-0000-0000-0000-000000000002", "requiredGrams": 5.4 }
+  ]
+}
+
+### Public mix list without internal cost
+GET {{gateway}}/api/mixes?publicOnly=true&availableOnly=true&branchId=10000000-0000-0000-0000-000000000001
+
+### Validate promo
+POST {{gateway}}/api/promocodes/validate
+Content-Type: application/json
+
+{
+  "code": "HOOKAH20",
+  "clientId": "90000000-0000-0000-0000-000000000001",
+  "orderAmount": 3000
+}
+
+### Review summary
+GET {{gateway}}/api/reviews/mixes/70000000-0000-0000-0000-000000000001/summary
+
+### Analytics dashboard
+GET {{gateway}}/api/analytics/dashboard?branchId=10000000-0000-0000-0000-000000000001&from=2026-04-01&to=2026-04-30
+
+### Notification templates
+GET {{gateway}}/api/notifications/templates
+
+### Create deposit booking
+POST {{gateway}}/api/bookings
+Content-Type: application/json
+
+{
+  "branchId": "10000000-0000-0000-0000-000000000001",
+  "tableId": "30000000-0000-0000-0000-000000000001",
+  "clientId": "90000000-0000-0000-0000-000000000001",
+  "startTime": "2026-05-01T20:00:00Z",
+  "endTime": "2026-05-01T22:00:00Z",
+  "guestsCount": 4,
+  "hookahId": "40000000-0000-0000-0000-000000000001",
+  "bowlId": "50000000-0000-0000-0000-000000000001",
+  "mixId": "70000000-0000-0000-0000-000000000001",
+  "comment": "Birthday",
+  "depositAmount": 2000
+}
+
+### Create payment
+POST {{gateway}}/api/payments/create
+Content-Type: application/json
+
+{
+  "clientId": "90000000-0000-0000-0000-000000000001",
+  "bookingId": "replace-with-booking-id",
+  "amount": 2000,
+  "currency": "RUB",
+  "type": "DEPOSIT",
+  "provider": "YOOKASSA"
+}

@@ -1,5 +1,5 @@
 # Nginx
 
-Placeholder for API Gateway edge routing configuration.
+Nginx edge routing configuration belongs here when the gateway is placed behind a reverse proxy.
 
-In the current MVP, service discovery is exposed by `api-gateway` at `/api/catalog/services` and `/api/catalog/routes`.
+Service discovery is exposed by `api-gateway` at `/api/catalog/services` and `/api/catalog/routes`.
