@@ -1,11 +1,15 @@
 using HookahPlatform.BuildingBlocks;
+using HookahPlatform.BuildingBlocks.Persistence;
+using HookahPlatform.AnalyticsService.Persistence;
 using HookahPlatform.Contracts;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.AddHookahServiceDefaults("analytics-service");
+builder.AddPostgresDbContext<AnalyticsDbContext>();
 
 var app = builder.Build();
 app.UseHookahServiceDefaults();
+app.MapPersistenceHealth<AnalyticsDbContext>("analytics-service");
 
 var orders = new Dictionary<Guid, AnalyticsOrder>();
 var bookings = new Dictionary<Guid, AnalyticsBooking>();

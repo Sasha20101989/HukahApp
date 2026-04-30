@@ -196,6 +196,7 @@ create table if not exists orders (
     created_at timestamp with time zone not null default now(),
     served_at timestamp with time zone null,
     completed_at timestamp with time zone null,
+    inventory_written_off_at timestamp with time zone null,
     payment_id uuid null,
     paid_amount numeric(12, 2) not null default 0 check (paid_amount >= 0),
     paid_at timestamp with time zone null
@@ -231,6 +232,7 @@ create table if not exists payments (
     original_amount numeric(12, 2) not null check (original_amount > 0),
     discount_amount numeric(12, 2) not null default 0 check (discount_amount >= 0),
     payable_amount numeric(12, 2) not null check (payable_amount >= 0),
+    refunded_amount numeric(12, 2) not null default 0 check (refunded_amount >= 0),
     currency varchar(8) not null,
     provider varchar(80) not null,
     promocode varchar(80) null,
@@ -439,8 +441,63 @@ insert into permissions(id, code, description) values
     ('02000000-0000-0000-0000-000000000008', 'bookings.create', 'Create client bookings')
 on conflict (code) do nothing;
 
+insert into role_permissions(role_id, permission_id)
+select r.id, p.id
+from roles r
+cross join permissions p
+where r.code = 'OWNER'
+on conflict do nothing;
+
+insert into role_permissions(role_id, permission_id)
+select r.id, p.id
+from roles r
+join permissions p on p.code = any(array[
+    'branches.manage',
+    'staff.manage',
+    'mixes.manage',
+    'inventory.manage',
+    'orders.manage',
+    'bookings.manage',
+    'analytics.read'
+])
+where r.code = 'MANAGER'
+on conflict do nothing;
+
+insert into role_permissions(role_id, permission_id)
+select r.id, p.id
+from roles r
+join permissions p on p.code = any(array[
+    'mixes.manage',
+    'inventory.manage',
+    'orders.manage'
+])
+where r.code = 'HOOKAH_MASTER'
+on conflict do nothing;
+
+insert into role_permissions(role_id, permission_id)
+select r.id, p.id
+from roles r
+join permissions p on p.code = any(array[
+    'orders.manage',
+    'bookings.manage'
+])
+where r.code = 'WAITER'
+on conflict do nothing;
+
+insert into role_permissions(role_id, permission_id)
+select r.id, p.id
+from roles r
+join permissions p on p.code = 'bookings.create'
+where r.code = 'CLIENT'
+on conflict do nothing;
+
 insert into branches(id, name, address, phone, timezone) values
     ('10000000-0000-0000-0000-000000000001', 'Hookah Place Center', 'Lenina, 1', '+79990000000', 'Europe/Moscow')
+on conflict (id) do nothing;
+
+insert into users(id, role_id, branch_id, name, phone, email, password_hash, status) values
+    ('90000000-0000-0000-0000-000000000001', '01000000-0000-0000-0000-000000000005', null, 'Client', '+79990000001', 'client@hookah.local', 'seed-password-hash', 'active'),
+    ('90000000-0000-0000-0000-000000000010', '01000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000001', 'Hookah Master', '+79991112233', null, 'seed-password-hash', 'active')
 on conflict (id) do nothing;
 
 insert into branch_working_hours(branch_id, day_of_week, opens_at, closes_at, is_closed)
@@ -456,6 +513,15 @@ insert into zones(id, branch_id, name, description, color) values
     ('21000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'Main zone', 'Central seating area', '#2f7d6d')
 on conflict (id) do nothing;
 
+insert into tables(id, hall_id, zone_id, name, capacity, status, x_position, y_position) values
+    ('30000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001', '21000000-0000-0000-0000-000000000001', 'Table 1', 4, 'FREE', 120, 300),
+    ('30000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000001', '21000000-0000-0000-0000-000000000001', 'Table 2', 6, 'FREE', 260, 300)
+on conflict (id) do nothing;
+
+insert into hookahs(id, branch_id, name, brand, model, status) values
+    ('40000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'Alpha X', 'Alpha Hookah', 'X', 'AVAILABLE')
+on conflict (id) do nothing;
+
 insert into bowls(id, name, type, capacity_grams, recommended_strength, average_smoke_minutes) values
     ('50000000-0000-0000-0000-000000000001', 'Oblako Phunnel M', 'PHUNNEL', 18, 'MEDIUM', 70)
 on conflict (id) do nothing;
@@ -464,6 +530,22 @@ insert into tobaccos(id, brand, line, flavor, strength, category, description, c
     ('60000000-0000-0000-0000-000000000001', 'Darkside', 'Base', 'Strawberry', 'STRONG', 'BERRY', 'Strawberry flavor', 8.5),
     ('60000000-0000-0000-0000-000000000002', 'Musthave', 'Classic', 'Mint', 'MEDIUM', 'FRESH', 'Cooling mint', 6.8),
     ('60000000-0000-0000-0000-000000000003', 'Element', 'Air', 'Blueberry', 'LIGHT', 'BERRY', 'Blueberry flavor', 7.2)
+on conflict (id) do nothing;
+
+insert into inventory_items(id, branch_id, tobacco_id, stock_grams, min_stock_grams) values
+    ('61000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', '60000000-0000-0000-0000-000000000001', 250, 50),
+    ('61000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000001', '60000000-0000-0000-0000-000000000002', 250, 50),
+    ('61000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000001', '60000000-0000-0000-0000-000000000003', 250, 50)
+on conflict (branch_id, tobacco_id) do nothing;
+
+insert into mixes(id, name, description, bowl_id, strength, taste_profile, total_grams, price, cost, margin, is_public, is_active, created_by) values
+    ('70000000-0000-0000-0000-000000000001', 'Berry Ice', 'Berry and fresh medium mix', '50000000-0000-0000-0000-000000000001', 'MEDIUM', 'BERRY_FRESH', 18, 850, 125.82, 724.18, true, true, '90000000-0000-0000-0000-000000000010')
+on conflict (id) do nothing;
+
+insert into mix_items(id, mix_id, tobacco_id, percent, grams) values
+    ('71000000-0000-0000-0000-000000000001', '70000000-0000-0000-0000-000000000001', '60000000-0000-0000-0000-000000000001', 40, 7.2),
+    ('71000000-0000-0000-0000-000000000002', '70000000-0000-0000-0000-000000000001', '60000000-0000-0000-0000-000000000002', 30, 5.4),
+    ('71000000-0000-0000-0000-000000000003', '70000000-0000-0000-0000-000000000001', '60000000-0000-0000-0000-000000000003', 30, 5.4)
 on conflict (id) do nothing;
 
 insert into promocodes(id, code, discount_type, discount_value, valid_from, valid_to, max_redemptions, per_client_limit) values
@@ -475,6 +557,7 @@ insert into notification_templates(code, channel, title, message) values
     ('booking.confirmed.client', 'PUSH', 'Бронь подтверждена', 'Ждем вас {startTime}.'),
     ('booking.cancelled.manager', 'CRM', 'Бронь отменена', 'Бронь {bookingId} отменена.'),
     ('payment.succeeded.client', 'PUSH', 'Оплата прошла', 'Депозит {amount} ₽ получен.'),
+    ('payment.refunded.client', 'PUSH', 'Возврат оформлен', 'Возвращено {amount} ₽.'),
     ('inventory.low-stock.manager', 'CRM', 'Низкий остаток', 'Табак {tobaccoId}: осталось {stockGrams} г.'),
     ('order.served.coal-timer', 'CRM', 'Кальян вынесен', 'Запущен таймер углей по заказу {orderId}.')
 on conflict (code) do nothing;

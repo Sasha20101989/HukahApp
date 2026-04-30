@@ -26,7 +26,7 @@ export async function registerClient(payload: RegisterPayload) {
 }
 
 export async function loginClient(phone: string, password: string) {
-  return postJson<{ accessToken: string; refreshToken: string }>("/api/auth/login", { phone, password });
+  return postJson<{ userId: string; accessToken: string; refreshToken: string }>("/api/auth/login", { phone, password });
 }
 
 export type CreatePaymentPayload = {
@@ -39,19 +39,20 @@ export type CreatePaymentPayload = {
   promocode?: string;
 };
 
-export async function createBooking(payload: CreateBookingPayload) {
-  return postJson<{ id: string; status: string }>("/api/bookings", payload);
+export async function createBooking(payload: CreateBookingPayload, accessToken: string) {
+  return postJson<{ id: string; status: string }>("/api/bookings", payload, accessToken);
 }
 
-export async function createDepositPayment(payload: CreatePaymentPayload) {
-  return postJson<{ paymentId: string; paymentUrl: string; amount: number; discount: number }>("/api/payments/create", payload);
+export async function createDepositPayment(payload: CreatePaymentPayload, accessToken: string) {
+  return postJson<{ paymentId: string; paymentUrl: string; amount: number; discount: number }>("/api/payments/create", payload, accessToken);
 }
 
-async function postJson<T>(path: string, payload: unknown): Promise<T> {
+async function postJson<T>(path: string, payload: unknown, accessToken?: string): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     method: "POST",
     headers: {
-      "Content-Type": "application/json"
+      "Content-Type": "application/json",
+      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {})
     },
     body: JSON.stringify(payload)
   });

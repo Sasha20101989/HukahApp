@@ -1,11 +1,15 @@
 using HookahPlatform.BuildingBlocks;
+using HookahPlatform.BuildingBlocks.Persistence;
+using HookahPlatform.NotificationService.Persistence;
 using HookahPlatform.Contracts;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.AddHookahServiceDefaults("notification-service");
+builder.AddPostgresDbContext<NotificationDbContext>();
 
 var app = builder.Build();
 app.UseHookahServiceDefaults();
+app.MapPersistenceHealth<NotificationDbContext>("notification-service");
 
 var notifications = new Dictionary<Guid, Notification>();
 var preferences = new Dictionary<Guid, NotificationPreference>();
@@ -83,6 +87,7 @@ app.MapPost("/api/notifications/dispatch-event", (NotificationEventRequest reque
         nameof(BookingConfirmed) => "booking.confirmed.client",
         nameof(BookingCancelled) => "booking.cancelled.manager",
         nameof(PaymentSucceeded) => "payment.succeeded.client",
+        nameof(PaymentRefunded) => "payment.refunded.client",
         nameof(LowStockDetected) => "inventory.low-stock.manager",
         nameof(OrderServed) => "order.served.coal-timer",
         _ => null
@@ -132,6 +137,7 @@ static Dictionary<string, NotificationTemplate> SeedTemplates()
         ["booking.confirmed.client"] = new("booking.confirmed.client", "PUSH", "Бронь подтверждена", "Ждем вас {startTime}."),
         ["booking.cancelled.manager"] = new("booking.cancelled.manager", "CRM", "Бронь отменена", "Бронь {bookingId} отменена."),
         ["payment.succeeded.client"] = new("payment.succeeded.client", "PUSH", "Оплата прошла", "Депозит {amount} ₽ получен."),
+        ["payment.refunded.client"] = new("payment.refunded.client", "PUSH", "Возврат оформлен", "Возвращено {amount} ₽."),
         ["inventory.low-stock.manager"] = new("inventory.low-stock.manager", "CRM", "Низкий остаток", "Табак {tobaccoId}: осталось {stockGrams} г."),
         ["order.served.coal-timer"] = new("order.served.coal-timer", "CRM", "Кальян вынесен", "Запущен таймер углей по заказу {orderId}.")
     };

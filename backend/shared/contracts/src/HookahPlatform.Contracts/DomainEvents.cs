@@ -88,6 +88,14 @@ public sealed record PaymentFailed(
     string Reason,
     DateTimeOffset OccurredAt) : IntegrationEvent(OccurredAt);
 
+public sealed record PaymentRefunded(
+    Guid PaymentId,
+    Guid? BookingId,
+    Guid? OrderId,
+    decimal Amount,
+    decimal TotalRefunded,
+    DateTimeOffset OccurredAt) : IntegrationEvent(OccurredAt);
+
 public sealed record ReviewCreated(
     Guid ReviewId,
     Guid ClientId,

@@ -1,16 +1,32 @@
 using HookahPlatform.BuildingBlocks;
+using HookahPlatform.BuildingBlocks.Persistence;
+using HookahPlatform.OrderService.Persistence;
 using HookahPlatform.Contracts;
 using System.Net.Http.Json;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.AddHookahServiceDefaults("order-service");
+builder.AddPostgresDbContext<OrderDbContext>();
 builder.Services.AddHttpClient();
 
 var app = builder.Build();
 app.UseHookahServiceDefaults();
+app.MapPersistenceHealth<OrderDbContext>("order-service");
 
 var orders = new Dictionary<Guid, HookahOrder>();
 var coalChanges = new List<CoalChange>();
+var allowedOrderTransitions = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+{
+    [OrderStatuses.New] = [OrderStatuses.Accepted, OrderStatuses.Preparing, OrderStatuses.Cancelled],
+    [OrderStatuses.Accepted] = [OrderStatuses.Preparing, OrderStatuses.Cancelled],
+    [OrderStatuses.Preparing] = [OrderStatuses.Ready, OrderStatuses.Served, OrderStatuses.Cancelled],
+    [OrderStatuses.Ready] = [OrderStatuses.Served, OrderStatuses.Cancelled],
+    [OrderStatuses.Served] = [OrderStatuses.Smoking, OrderStatuses.Completed, OrderStatuses.Cancelled],
+    [OrderStatuses.Smoking] = [OrderStatuses.CoalChangeRequired, OrderStatuses.Completed, OrderStatuses.Cancelled],
+    [OrderStatuses.CoalChangeRequired] = [OrderStatuses.Smoking, OrderStatuses.Completed, OrderStatuses.Cancelled],
+    [OrderStatuses.Completed] = [],
+    [OrderStatuses.Cancelled] = []
+};
 
 app.MapGet("/api/orders", (Guid? branchId, string? status, DateOnly? date) =>
 {
@@ -21,6 +37,11 @@ app.MapGet("/api/orders", (Guid? branchId, string? status, DateOnly? date) =>
     }
     if (!string.IsNullOrWhiteSpace(status))
     {
+        if (!allowedOrderTransitions.ContainsKey(status))
+        {
+            return HttpResults.Validation($"Unsupported order status '{status}'.");
+        }
+
         query = query.Where(order => string.Equals(order.Status, status, StringComparison.OrdinalIgnoreCase));
     }
     if (date is not null)
@@ -30,6 +51,12 @@ app.MapGet("/api/orders", (Guid? branchId, string? status, DateOnly? date) =>
 
     return Results.Ok(query.OrderByDescending(order => order.CreatedAt));
 });
+
+app.MapGet("/api/orders/status-flow", () => Results.Ok(allowedOrderTransitions.Select(rule => new
+{
+    status = rule.Key,
+    next = rule.Value
+})));
 
 app.MapPost("/api/orders", async (CreateOrderRequest request, IEventPublisher events, IHttpClientFactory httpClientFactory, IConfiguration configuration, CancellationToken cancellationToken) =>
 {
@@ -72,7 +99,7 @@ app.MapPost("/api/orders", async (CreateOrderRequest request, IEventPublisher ev
 
     var orderId = Guid.NewGuid();
     var item = new OrderItem(Guid.NewGuid(), orderId, request.HookahId, request.BowlId, request.MixId, request.Price ?? 850m, OrderStatuses.New);
-    var order = new HookahOrder(orderId, request.BranchId, request.TableId, request.ClientId, null, request.WaiterId, request.BookingId, OrderStatuses.New, item.Price, request.Comment, DateTimeOffset.UtcNow, null, null, null, null, 0, null, [item]);
+    var order = new HookahOrder(orderId, request.BranchId, request.TableId, request.ClientId, null, request.WaiterId, request.BookingId, OrderStatuses.New, item.Price, request.Comment, DateTimeOffset.UtcNow, null, null, null, null, null, 0, null, [item]);
     orders[order.Id] = order;
 
     await MarkResourcesInUseAsync(request.TableId, request.HookahId, httpClientFactory, configuration, cancellationToken);
@@ -91,19 +118,42 @@ app.MapPatch("/api/orders/{id:guid}/status", async (Guid id, UpdateOrderStatusRe
     }
 
     var normalized = request.Status.ToUpperInvariant();
-    var servedAt = normalized == OrderStatuses.Served ? DateTimeOffset.UtcNow : order.ServedAt;
-    var completedAt = normalized == OrderStatuses.Completed ? DateTimeOffset.UtcNow : order.CompletedAt;
-    var nextCoalChangeAt = normalized == OrderStatuses.Smoking ? DateTimeOffset.UtcNow.AddMinutes(20) : order.NextCoalChangeAt;
-    var updated = order with { Status = normalized, ServedAt = servedAt, CompletedAt = completedAt, NextCoalChangeAt = nextCoalChangeAt };
+    if (!allowedOrderTransitions.ContainsKey(normalized))
+    {
+        return HttpResults.Validation($"Unsupported order status '{request.Status}'.");
+    }
+
+    if (!CanTransition(order.Status, normalized, allowedOrderTransitions))
+    {
+        return HttpResults.Conflict($"Order status cannot transition from {order.Status} to {normalized}.");
+    }
+
+    var now = DateTimeOffset.UtcNow;
+    var servedAt = normalized == OrderStatuses.Served ? order.ServedAt ?? now : order.ServedAt;
+    var completedAt = normalized == OrderStatuses.Completed ? order.CompletedAt ?? now : order.CompletedAt;
+    var nextCoalChangeAt = normalized == OrderStatuses.Smoking ? now.AddMinutes(20) : order.NextCoalChangeAt;
+    var inventoryWrittenOffAt = order.InventoryWrittenOffAt;
+    var shouldWriteOff = normalized == OrderStatuses.Served && inventoryWrittenOffAt is null;
+
+    if (shouldWriteOff)
+    {
+        var item = order.Items.First();
+        await WriteOffMixAsync(order.BranchId, order.Id, item.MixId, httpClientFactory, configuration, cancellationToken);
+        inventoryWrittenOffAt = now;
+        await events.PublishAsync(new OrderServed(order.Id, order.BranchId, item.MixId, item.BowlId, servedAt!.Value, now));
+    }
+
+    var updated = order with
+    {
+        Status = normalized,
+        ServedAt = servedAt,
+        CompletedAt = completedAt,
+        NextCoalChangeAt = nextCoalChangeAt,
+        InventoryWrittenOffAt = inventoryWrittenOffAt
+    };
     orders[id] = updated;
 
-    await events.PublishAsync(new OrderStatusChanged(id, normalized, DateTimeOffset.UtcNow));
-    if (normalized == OrderStatuses.Served)
-    {
-        var item = updated.Items.First();
-        await WriteOffMixAsync(updated.BranchId, updated.Id, item.MixId, httpClientFactory, configuration, cancellationToken);
-        await events.PublishAsync(new OrderServed(updated.Id, updated.BranchId, item.MixId, item.BowlId, servedAt!.Value, DateTimeOffset.UtcNow));
-    }
+    await events.PublishAsync(new OrderStatusChanged(id, normalized, now));
     if (normalized == OrderStatuses.Completed)
     {
         var item = updated.Items.First();
@@ -118,6 +168,11 @@ app.MapPatch("/api/orders/{id:guid}/assign-hookah-master", (Guid id, AssignHooka
     if (!orders.TryGetValue(id, out var order))
     {
         return HttpResults.NotFound("Order", id);
+    }
+
+    if (order.Status is OrderStatuses.Completed or OrderStatuses.Cancelled)
+    {
+        return HttpResults.Conflict("Cannot assign hookah master to completed or cancelled order.");
     }
 
     orders[id] = order with { HookahMasterId = request.HookahMasterId };
@@ -142,10 +197,15 @@ app.MapPost("/api/orders/{id:guid}/coal-change", (Guid id, CoalChangeRequest req
         return HttpResults.NotFound("Order", id);
     }
 
+    var order = orders[id];
+    if (order.Status is not OrderStatuses.Served and not OrderStatuses.Smoking and not OrderStatuses.CoalChangeRequired)
+    {
+        return HttpResults.Conflict("Coal change can be registered only after the order is served.");
+    }
+
     var change = new CoalChange(Guid.NewGuid(), id, request.ChangedAt ?? DateTimeOffset.UtcNow);
     coalChanges.Add(change);
 
-    var order = orders[id];
     orders[id] = order with
     {
         Status = OrderStatuses.Smoking,
@@ -178,7 +238,13 @@ app.MapDelete("/api/orders/{id:guid}", async (Guid id, CancelOrderRequest reques
         return HttpResults.NotFound("Order", id);
     }
 
-    orders[id] = order with { Status = OrderStatuses.Cancelled };
+    if (!CanTransition(order.Status, OrderStatuses.Cancelled, allowedOrderTransitions))
+    {
+        return HttpResults.Conflict($"Order status cannot transition from {order.Status} to {OrderStatuses.Cancelled}.");
+    }
+
+    var cancelled = order with { Status = OrderStatuses.Cancelled };
+    orders[id] = cancelled;
     var item = order.Items.First();
     await ReleaseResourcesAsync(order.TableId, item.HookahId, httpClientFactory, configuration, cancellationToken);
     await events.PublishAsync(new OrderStatusChanged(id, OrderStatuses.Cancelled, DateTimeOffset.UtcNow));
@@ -186,6 +252,17 @@ app.MapDelete("/api/orders/{id:guid}", async (Guid id, CancelOrderRequest reques
 });
 
 app.Run();
+
+static bool CanTransition(string currentStatus, string nextStatus, IReadOnlyDictionary<string, string[]> allowedOrderTransitions)
+{
+    if (currentStatus.Equals(nextStatus, StringComparison.OrdinalIgnoreCase))
+    {
+        return true;
+    }
+
+    return allowedOrderTransitions.TryGetValue(currentStatus, out var allowedNextStatuses) &&
+           allowedNextStatuses.Contains(nextStatus, StringComparer.OrdinalIgnoreCase);
+}
 
 static async Task WriteOffMixAsync(Guid branchId, Guid orderId, Guid mixId, IHttpClientFactory httpClientFactory, IConfiguration configuration, CancellationToken cancellationToken)
 {
@@ -283,7 +360,7 @@ static async Task<InventoryAvailabilityResponse> CheckMixAvailabilityAsync(Guid 
     return (await response.Content.ReadFromJsonAsync<InventoryAvailabilityResponse>(cancellationToken))!;
 }
 
-public sealed record HookahOrder(Guid Id, Guid BranchId, Guid TableId, Guid? ClientId, Guid? HookahMasterId, Guid? WaiterId, Guid? BookingId, string Status, decimal TotalPrice, string? Comment, DateTimeOffset CreatedAt, DateTimeOffset? ServedAt, DateTimeOffset? CompletedAt, DateTimeOffset? NextCoalChangeAt, Guid? PaymentId, decimal PaidAmount, DateTimeOffset? PaidAt, IReadOnlyCollection<OrderItem> Items);
+public sealed record HookahOrder(Guid Id, Guid BranchId, Guid TableId, Guid? ClientId, Guid? HookahMasterId, Guid? WaiterId, Guid? BookingId, string Status, decimal TotalPrice, string? Comment, DateTimeOffset CreatedAt, DateTimeOffset? ServedAt, DateTimeOffset? CompletedAt, DateTimeOffset? NextCoalChangeAt, DateTimeOffset? InventoryWrittenOffAt, Guid? PaymentId, decimal PaidAmount, DateTimeOffset? PaidAt, IReadOnlyCollection<OrderItem> Items);
 public sealed record OrderItem(Guid Id, Guid OrderId, Guid HookahId, Guid BowlId, Guid MixId, decimal Price, string Status);
 public sealed record CoalChange(Guid Id, Guid OrderId, DateTimeOffset ChangedAt);
 public sealed record CreateOrderRequest(Guid BranchId, Guid TableId, Guid? ClientId, Guid HookahId, Guid BowlId, Guid MixId, Guid? BookingId, Guid? WaiterId, decimal? Price, string? Comment);

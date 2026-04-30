@@ -185,6 +185,12 @@ public sealed record NotificationEventRequest(string Event, IReadOnlyCollection<
                 ["paymentId"] = e.PaymentId.ToString(),
                 ["amount"] = e.Amount.ToString("0.##")
             }),
+            PaymentRefunded e => new(nameof(PaymentRefunded), [], new Dictionary<string, string>
+            {
+                ["paymentId"] = e.PaymentId.ToString(),
+                ["amount"] = e.Amount.ToString("0.##"),
+                ["totalRefunded"] = e.TotalRefunded.ToString("0.##")
+            }),
             LowStockDetected e => new(nameof(LowStockDetected), [], new Dictionary<string, string>
             {
                 ["branchId"] = e.BranchId.ToString(),

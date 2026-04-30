@@ -1,4 +1,5 @@
 x-service-events: &service-events
+  ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=hookah;Username=hookah;Password=hookah
   Services__analytics-service__BaseUrl: http://analytics-service:8080
   Services__notification-service__BaseUrl: http://notification-service:8080
 
@@ -79,6 +80,7 @@ services:
       Jwt__Issuer: hookah-platform
       Jwt__Audience: hookah-platform-clients
       Jwt__Secret: change-this-secret-before-production-change-this-secret
+      Services__user-service__BaseUrl: http://user-service:8080
 
   user-service:
     build:
@@ -143,6 +145,7 @@ services:
     command: ["HookahPlatform.BookingService.dll"]
     environment:
       <<: *service-events
+      Services__user-service__BaseUrl: http://user-service:8080
 
   payment-service:
     build:
@@ -164,6 +167,8 @@ services:
       args:
         PROJECT_PATH: services/notification-service/src/HookahPlatform.NotificationService/HookahPlatform.NotificationService.csproj
     command: ["HookahPlatform.NotificationService.dll"]
+    environment:
+      <<: *service-events
 
   analytics-service:
     build:
@@ -172,6 +177,8 @@ services:
       args:
         PROJECT_PATH: services/analytics-service/src/HookahPlatform.AnalyticsService/HookahPlatform.AnalyticsService.csproj
     command: ["HookahPlatform.AnalyticsService.dll"]
+    environment:
+      <<: *service-events
 
   review-service:
     build:

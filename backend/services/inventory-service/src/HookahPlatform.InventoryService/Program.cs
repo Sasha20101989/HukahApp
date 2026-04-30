@@ -1,11 +1,15 @@
 using HookahPlatform.BuildingBlocks;
+using HookahPlatform.BuildingBlocks.Persistence;
+using HookahPlatform.InventoryService.Persistence;
 using HookahPlatform.Contracts;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.AddHookahServiceDefaults("inventory-service");
+builder.AddPostgresDbContext<InventoryDbContext>();
 
 var app = builder.Build();
 app.UseHookahServiceDefaults();
+app.MapPersistenceHealth<InventoryDbContext>("inventory-service");
 
 var items = new Dictionary<(Guid BranchId, Guid TobaccoId), InventoryItem>();
 var movements = new List<InventoryMovement>();

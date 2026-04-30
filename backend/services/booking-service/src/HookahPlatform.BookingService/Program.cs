@@ -1,11 +1,17 @@
 using HookahPlatform.BuildingBlocks;
+using HookahPlatform.BuildingBlocks.Persistence;
+using HookahPlatform.BookingService.Persistence;
 using HookahPlatform.Contracts;
+using System.Net.Http.Json;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.AddHookahServiceDefaults("booking-service");
+builder.AddPostgresDbContext<BookingDbContext>();
+builder.Services.AddHttpClient();
 
 var app = builder.Build();
 app.UseHookahServiceDefaults();
+app.MapPersistenceHealth<BookingDbContext>("booking-service");
 
 var tables = new Dictionary<Guid, BookingTable>
 {
@@ -14,6 +20,17 @@ var tables = new Dictionary<Guid, BookingTable>
 };
 var workingHours = SeedWorkingHours();
 var bookings = new Dictionary<Guid, Booking>();
+var allowedBookingStatuses = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+{
+    BookingStatuses.New,
+    BookingStatuses.WaitingPayment,
+    BookingStatuses.Paid,
+    BookingStatuses.Confirmed,
+    BookingStatuses.ClientArrived,
+    BookingStatuses.Completed,
+    BookingStatuses.Cancelled,
+    BookingStatuses.NoShow
+};
 
 app.MapGet("/api/bookings/availability", (Guid branchId, DateOnly date, TimeOnly time, int guestsCount) =>
 {
@@ -32,7 +49,7 @@ app.MapGet("/api/bookings/availability", (Guid branchId, DateOnly date, TimeOnly
     return Results.Ok(available);
 });
 
-app.MapPost("/api/bookings", async (CreateBookingRequest request, IEventPublisher events) =>
+app.MapPost("/api/bookings", async (CreateBookingRequest request, IEventPublisher events, IHttpClientFactory httpClientFactory, IConfiguration configuration, CancellationToken cancellationToken) =>
 {
     if (!tables.TryGetValue(request.TableId, out var table) || table.BranchId != request.BranchId)
     {
@@ -47,6 +64,12 @@ app.MapPost("/api/bookings", async (CreateBookingRequest request, IEventPublishe
     if (!BranchIsOpen(request.BranchId, request.StartTime, request.EndTime, workingHours))
     {
         return HttpResults.Validation("Branch is closed for the requested booking time.");
+    }
+
+    var eligibility = await GetBookingEligibilityAsync(request.ClientId, httpClientFactory, configuration, cancellationToken);
+    if (!eligibility.IsEligible)
+    {
+        return HttpResults.Conflict(eligibility.Reason ?? "Client cannot create bookings.");
     }
 
     var intersects = bookings.Values.Any(booking =>
@@ -85,6 +108,11 @@ app.MapGet("/api/bookings", (Guid? branchId, DateOnly? date, string? status) =>
     }
     if (!string.IsNullOrWhiteSpace(status))
     {
+        if (!allowedBookingStatuses.Contains(status))
+        {
+            return HttpResults.Validation($"Unsupported booking status '{status}'.");
+        }
+
         query = query.Where(booking => string.Equals(booking.Status, status, StringComparison.OrdinalIgnoreCase));
     }
 
@@ -182,6 +210,22 @@ app.MapPatch("/api/bookings/{id:guid}/no-show", (Guid id) =>
     return Results.Ok(bookings[id]);
 });
 
+app.MapPatch("/api/bookings/{id:guid}/client-arrived", (Guid id) =>
+{
+    if (!bookings.TryGetValue(id, out var booking))
+    {
+        return HttpResults.NotFound("Booking", id);
+    }
+
+    if (booking.Status is not BookingStatuses.Confirmed)
+    {
+        return HttpResults.Conflict("Only confirmed bookings can be marked as client arrived.");
+    }
+
+    bookings[id] = booking with { Status = BookingStatuses.ClientArrived };
+    return Results.Ok(bookings[id]);
+});
+
 app.MapPatch("/api/bookings/{id:guid}/complete", (Guid id) =>
 {
     if (!bookings.TryGetValue(id, out var booking))
@@ -217,6 +261,21 @@ app.MapPatch("/api/bookings/mark-expired-no-shows", (DateTimeOffset? now) =>
 });
 
 app.Run();
+
+static async Task<BookingEligibility> GetBookingEligibilityAsync(Guid clientId, IHttpClientFactory httpClientFactory, IConfiguration configuration, CancellationToken cancellationToken)
+{
+    var userBaseUrl = configuration["Services:user-service:BaseUrl"] ?? "http://user-service:8080";
+    var client = httpClientFactory.CreateClient("booking-service");
+
+    var response = await client.GetAsync($"{userBaseUrl}/api/users/{clientId}/booking-eligibility", cancellationToken);
+    if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+    {
+        return new BookingEligibility(clientId, false, "Client does not exist.");
+    }
+
+    response.EnsureSuccessStatusCode();
+    return (await response.Content.ReadFromJsonAsync<BookingEligibility>(cancellationToken))!;
+}
 
 static Dictionary<(Guid BranchId, DayOfWeek DayOfWeek), BranchWorkingHours> SeedWorkingHours()
 {
@@ -255,3 +314,4 @@ public sealed record CreateBookingRequest(Guid BranchId, Guid TableId, Guid Clie
 public sealed record BookingPaymentSucceededRequest(Guid PaymentId, decimal Amount);
 public sealed record CancelBookingRequest(string Reason);
 public sealed record RescheduleBookingRequest(DateTimeOffset StartTime, DateTimeOffset EndTime, Guid TableId);
+public sealed record BookingEligibility(Guid UserId, bool IsEligible, string? Reason);

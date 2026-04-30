@@ -43,6 +43,15 @@ public static class HookahStatuses
     public const string WrittenOff = "WRITTEN_OFF";
 }
 
+public static class RoleCodes
+{
+    public const string Owner = "OWNER";
+    public const string Manager = "MANAGER";
+    public const string HookahMaster = "HOOKAH_MASTER";
+    public const string Waiter = "WAITER";
+    public const string Client = "CLIENT";
+}
+
 public static class PermissionCodes
 {
     public const string BranchesManage = "branches.manage";
@@ -54,3 +63,57 @@ public static class PermissionCodes
     public const string AnalyticsRead = "analytics.read";
     public const string BookingsCreate = "bookings.create";
 }
+
+public static class RolePermissionCatalog
+{
+    public static readonly PermissionDefinition[] Permissions =
+    [
+        new(PermissionCodes.BranchesManage, "Manage branches, halls, zones and tables"),
+        new(PermissionCodes.StaffManage, "Manage staff accounts and shifts"),
+        new(PermissionCodes.MixesManage, "Manage bowls, tobaccos and mixes"),
+        new(PermissionCodes.InventoryManage, "Manage stock and inventory movements"),
+        new(PermissionCodes.OrdersManage, "Manage hookah orders and order statuses"),
+        new(PermissionCodes.BookingsManage, "Manage bookings and no-show statuses"),
+        new(PermissionCodes.AnalyticsRead, "Read analytics dashboards and reports"),
+        new(PermissionCodes.BookingsCreate, "Create client bookings")
+    ];
+
+    public static readonly RoleDefinition[] Roles =
+    [
+        new("Owner", RoleCodes.Owner, ["*"]),
+        new("Manager", RoleCodes.Manager, [
+            PermissionCodes.BranchesManage,
+            PermissionCodes.StaffManage,
+            PermissionCodes.MixesManage,
+            PermissionCodes.InventoryManage,
+            PermissionCodes.OrdersManage,
+            PermissionCodes.BookingsManage,
+            PermissionCodes.AnalyticsRead
+        ]),
+        new("Hookah master", RoleCodes.HookahMaster, [
+            PermissionCodes.MixesManage,
+            PermissionCodes.InventoryManage,
+            PermissionCodes.OrdersManage
+        ]),
+        new("Waiter", RoleCodes.Waiter, [
+            PermissionCodes.OrdersManage,
+            PermissionCodes.BookingsManage
+        ]),
+        new("Client", RoleCodes.Client, [
+            PermissionCodes.BookingsCreate
+        ])
+    ];
+
+    public static IReadOnlyCollection<string> GetPermissions(string role)
+    {
+        var definition = Roles.FirstOrDefault(candidate =>
+            candidate.Code.Equals(role, StringComparison.OrdinalIgnoreCase) ||
+            candidate.Name.Equals(role, StringComparison.OrdinalIgnoreCase) ||
+            candidate.Code.Replace("_", string.Empty).Equals(role, StringComparison.OrdinalIgnoreCase));
+
+        return definition?.Permissions ?? [];
+    }
+}
+
+public sealed record RoleDefinition(string Name, string Code, IReadOnlyCollection<string> Permissions);
+public sealed record PermissionDefinition(string Code, string Description);

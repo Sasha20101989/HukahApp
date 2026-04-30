@@ -1,11 +1,15 @@
 using HookahPlatform.BuildingBlocks;
+using HookahPlatform.BuildingBlocks.Persistence;
+using HookahPlatform.ReviewService.Persistence;
 using HookahPlatform.Contracts;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.AddHookahServiceDefaults("review-service");
+builder.AddPostgresDbContext<ReviewDbContext>();
 
 var app = builder.Build();
 app.UseHookahServiceDefaults();
+app.MapPersistenceHealth<ReviewDbContext>("review-service");
 
 var reviews = new Dictionary<Guid, Review>();
 SeedReviews(reviews);

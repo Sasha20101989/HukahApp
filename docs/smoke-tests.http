@@ -1,4 +1,6 @@
 @gateway = http://localhost:8080
+@clientToken = replace-with-client-access-token
+@ownerToken = replace-with-owner-access-token
 
 ### Gateway catalog
 GET {{gateway}}/api/catalog/services
@@ -23,11 +25,32 @@ Content-Type: application/json
   "password": "password"
 }
 
+### Login owner
+POST {{gateway}}/api/auth/login
+Content-Type: application/json
+
+{
+  "phone": "+79990000000",
+  "password": "password"
+}
+
 ### Branch floor plan
 GET {{gateway}}/api/branches/10000000-0000-0000-0000-000000000001/floor-plan
 
 ### Staff shifts
 GET {{gateway}}/api/staff/shifts?branchId=10000000-0000-0000-0000-000000000001&from=2026-05-01&to=2026-05-02
+
+### Roles
+GET {{gateway}}/api/roles
+
+### Permissions
+GET {{gateway}}/api/permissions
+
+### Client booking eligibility
+GET {{gateway}}/api/users/90000000-0000-0000-0000-000000000001/booking-eligibility
+
+### Client permissions
+GET {{gateway}}/api/users/90000000-0000-0000-0000-000000000001/permissions
 
 ### Calculate mix grams
 POST {{gateway}}/api/mixes/calculate
@@ -47,6 +70,7 @@ GET {{gateway}}/api/bookings/availability?branchId=10000000-0000-0000-0000-00000
 ### Check inventory for a mix
 POST {{gateway}}/api/inventory/check
 Content-Type: application/json
+Authorization: Bearer {{ownerToken}}
 
 {
   "branchId": "10000000-0000-0000-0000-000000000001",
@@ -78,9 +102,49 @@ GET {{gateway}}/api/analytics/dashboard?branchId=10000000-0000-0000-0000-0000000
 ### Notification templates
 GET {{gateway}}/api/notifications/templates
 
+### Order status flow
+GET {{gateway}}/api/orders/status-flow
+
+### Create order
+POST {{gateway}}/api/orders
+Content-Type: application/json
+Authorization: Bearer {{ownerToken}}
+
+{
+  "branchId": "10000000-0000-0000-0000-000000000001",
+  "tableId": "30000000-0000-0000-0000-000000000001",
+  "clientId": "90000000-0000-0000-0000-000000000001",
+  "hookahId": "40000000-0000-0000-0000-000000000001",
+  "bowlId": "50000000-0000-0000-0000-000000000001",
+  "mixId": "70000000-0000-0000-0000-000000000001",
+  "waiterId": null,
+  "bookingId": null,
+  "price": 850,
+  "comment": "Medium strength"
+}
+
+### Move order to preparing
+PATCH {{gateway}}/api/orders/replace-with-order-id/status
+Content-Type: application/json
+Authorization: Bearer {{ownerToken}}
+
+{
+  "status": "PREPARING"
+}
+
+### Serve order and write off inventory once
+PATCH {{gateway}}/api/orders/replace-with-order-id/status
+Content-Type: application/json
+Authorization: Bearer {{ownerToken}}
+
+{
+  "status": "SERVED"
+}
+
 ### Create deposit booking
 POST {{gateway}}/api/bookings
 Content-Type: application/json
+Authorization: Bearer {{clientToken}}
 
 {
   "branchId": "10000000-0000-0000-0000-000000000001",
@@ -99,6 +163,7 @@ Content-Type: application/json
 ### Create payment
 POST {{gateway}}/api/payments/create
 Content-Type: application/json
+Authorization: Bearer {{clientToken}}
 
 {
   "clientId": "90000000-0000-0000-0000-000000000001",
@@ -108,6 +173,26 @@ Content-Type: application/json
   "type": "DEPOSIT",
   "provider": "YOOKASSA",
   "promocode": "HOOKAH20"
+}
+
+### YooKassa webhook
+POST {{gateway}}/api/payments/webhook/yookassa
+Content-Type: application/json
+
+{
+  "paymentId": "replace-with-payment-id",
+  "externalPaymentId": "yk-test-1",
+  "succeeded": true
+}
+
+### Refund payment
+POST {{gateway}}/api/payments/replace-with-payment-id/refund
+Content-Type: application/json
+Authorization: Bearer {{ownerToken}}
+
+{
+  "amount": 500,
+  "reason": "Partial refund"
 }
 
 ### Read table

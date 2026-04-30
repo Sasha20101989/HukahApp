@@ -18,7 +18,8 @@ Implemented event contracts:
 - `LowStockDetected`
 - `PaymentSucceeded`
 - `PaymentFailed`
+- `PaymentRefunded`
 - `ReviewCreated`
 - `MixCreated`
 
-`IEventPublisher` is the application boundary for event delivery. The current local implementation records events for diagnostics; RabbitMQ delivery should be added behind the same interface so service code does not depend on transport details.
+`IEventPublisher` is the application boundary for event delivery. The current local implementation records events for diagnostics and performs best-effort HTTP fan-out to Analytics/Notification service endpoints; RabbitMQ delivery should stay behind the same interface so service code does not depend on transport details.

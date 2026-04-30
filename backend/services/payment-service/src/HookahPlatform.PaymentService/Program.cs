@@ -1,13 +1,17 @@
 using HookahPlatform.BuildingBlocks;
+using HookahPlatform.BuildingBlocks.Persistence;
+using HookahPlatform.PaymentService.Persistence;
 using HookahPlatform.Contracts;
 using System.Net.Http.Json;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.AddHookahServiceDefaults("payment-service");
+builder.AddPostgresDbContext<PaymentDbContext>();
 builder.Services.AddHttpClient();
 
 var app = builder.Build();
 app.UseHookahServiceDefaults();
+app.MapPersistenceHealth<PaymentDbContext>("payment-service");
 
 var payments = new Dictionary<Guid, Payment>();
 
@@ -31,7 +35,7 @@ app.MapPost("/api/payments/create", async (CreatePaymentRequest request, IHttpCl
     }
 
     var payableAmount = Math.Max(0, request.Amount - discount);
-    var payment = new Payment(Guid.NewGuid(), request.ClientId, request.OrderId, request.BookingId, request.Amount, discount, payableAmount, request.Currency, request.Provider, request.Promocode, null, PaymentStatuses.Pending, request.Type, DateTimeOffset.UtcNow);
+    var payment = new Payment(Guid.NewGuid(), request.ClientId, request.OrderId, request.BookingId, request.Amount, discount, payableAmount, 0, request.Currency, request.Provider, request.Promocode, null, PaymentStatuses.Pending, request.Type, DateTimeOffset.UtcNow);
     payments[payment.Id] = payment;
 
     return Results.Ok(new
@@ -83,7 +87,7 @@ app.MapPost("/api/payments/webhook/yookassa", async (YooKassaWebhook request, IE
 app.MapGet("/api/payments/{id:guid}", (Guid id) =>
     payments.TryGetValue(id, out var payment) ? Results.Ok(payment) : HttpResults.NotFound("Payment", id));
 
-app.MapPost("/api/payments/{id:guid}/refund", (Guid id, RefundRequest request) =>
+app.MapPost("/api/payments/{id:guid}/refund", async (Guid id, RefundRequest request, IEventPublisher events) =>
 {
     if (!payments.TryGetValue(id, out var payment))
     {
@@ -95,14 +99,17 @@ app.MapPost("/api/payments/{id:guid}/refund", (Guid id, RefundRequest request) =
         return HttpResults.Conflict("Only successful payments can be refunded.");
     }
 
-    if (request.Amount <= 0 || request.Amount > payment.PayableAmount)
+    var refundable = payment.PayableAmount - payment.RefundedAmount;
+    if (request.Amount <= 0 || request.Amount > refundable)
     {
         return HttpResults.Validation("Refund amount must be positive and cannot exceed payment amount.");
     }
 
-    var status = request.Amount == payment.PayableAmount ? PaymentStatuses.Refunded : PaymentStatuses.PartiallyRefunded;
-    payments[id] = payment with { Status = status };
-    return Results.Ok(new { paymentId = id, status, request.Amount, request.Reason });
+    var totalRefunded = payment.RefundedAmount + request.Amount;
+    var status = totalRefunded == payment.PayableAmount ? PaymentStatuses.Refunded : PaymentStatuses.PartiallyRefunded;
+    payments[id] = payment with { Status = status, RefundedAmount = totalRefunded };
+    await events.PublishAsync(new PaymentRefunded(id, payment.BookingId, payment.OrderId, request.Amount, totalRefunded, DateTimeOffset.UtcNow));
+    return Results.Ok(new { paymentId = id, status, request.Amount, totalRefunded, request.Reason });
 });
 
 app.Run();
@@ -157,7 +164,7 @@ static async Task<PromoRedeemResult> RedeemPromocodeAsync(string code, Guid clie
     return (await response.Content.ReadFromJsonAsync<PromoRedeemResult>(cancellationToken))!;
 }
 
-public sealed record Payment(Guid Id, Guid ClientId, Guid? OrderId, Guid? BookingId, decimal OriginalAmount, decimal DiscountAmount, decimal PayableAmount, string Currency, string Provider, string? Promocode, string? ExternalPaymentId, string Status, string Type, DateTimeOffset CreatedAt);
+public sealed record Payment(Guid Id, Guid ClientId, Guid? OrderId, Guid? BookingId, decimal OriginalAmount, decimal DiscountAmount, decimal PayableAmount, decimal RefundedAmount, string Currency, string Provider, string? Promocode, string? ExternalPaymentId, string Status, string Type, DateTimeOffset CreatedAt);
 public sealed record CreatePaymentRequest(Guid ClientId, Guid? OrderId, Guid? BookingId, decimal Amount, string Currency, string Type, string Provider, string? Promocode);
 public sealed record YooKassaWebhook(Guid PaymentId, string ExternalPaymentId, bool Succeeded, string? Reason);
 public sealed record RefundRequest(decimal Amount, string Reason);

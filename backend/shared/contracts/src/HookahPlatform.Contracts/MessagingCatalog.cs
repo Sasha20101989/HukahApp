@@ -19,6 +19,7 @@ public static class MessagingCatalog
         new(nameof(LowStockDetected), "inventory.low-stock-detected"),
         new(nameof(PaymentSucceeded), "payment.succeeded"),
         new(nameof(PaymentFailed), "payment.failed"),
+        new(nameof(PaymentRefunded), "payment.refunded"),
         new(nameof(ReviewCreated), "review.created"),
         new(nameof(MixCreated), "mix.created")
     ];

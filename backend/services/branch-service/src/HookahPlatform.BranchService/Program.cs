@@ -1,11 +1,15 @@
 using HookahPlatform.BuildingBlocks;
+using HookahPlatform.BuildingBlocks.Persistence;
+using HookahPlatform.BranchService.Persistence;
 using HookahPlatform.Contracts;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.AddHookahServiceDefaults("branch-service");
+builder.AddPostgresDbContext<BranchDbContext>();
 
 var app = builder.Build();
 app.UseHookahServiceDefaults();
+app.MapPersistenceHealth<BranchDbContext>("branch-service");
 
 var branches = new Dictionary<Guid, Branch>();
 var halls = new Dictionary<Guid, Hall>();

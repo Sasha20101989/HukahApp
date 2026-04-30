@@ -43,6 +43,7 @@ export default function ClientBookingPage() {
       }
 
       let clientId: string;
+      let accessToken: string;
       try {
         const auth = await registerClient({
           name: clientName.trim(),
@@ -51,9 +52,11 @@ export default function ClientBookingPage() {
           password: clientPhone.trim()
         });
         clientId = auth.userId;
+        accessToken = auth.accessToken;
       } catch {
-        await loginClient(clientPhone.trim(), clientPhone.trim());
-        throw new Error("Клиент уже зарегистрирован. Войдите в личный кабинет перед бронированием.");
+        const auth = await loginClient(clientPhone.trim(), clientPhone.trim());
+        clientId = auth.userId;
+        accessToken = auth.accessToken;
       }
 
       const start = new Date(`${date}T${time}:00.000Z`);
@@ -70,7 +73,7 @@ export default function ClientBookingPage() {
         mixId,
         comment,
         depositAmount: deposit
-      });
+      }, accessToken);
 
       const payment = await createDepositPayment({
         clientId,
@@ -80,7 +83,7 @@ export default function ClientBookingPage() {
         type: "DEPOSIT",
         provider: "YOOKASSA",
         promocode: promocode.trim() || undefined
-      });
+      }, accessToken);
 
       setSubmitState("success");
       setSubmitMessage(`Бронь создана. Ссылка на оплату: ${payment.paymentUrl}`);

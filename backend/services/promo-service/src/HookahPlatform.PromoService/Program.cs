@@ -1,10 +1,14 @@
 using HookahPlatform.BuildingBlocks;
+using HookahPlatform.BuildingBlocks.Persistence;
+using HookahPlatform.PromoService.Persistence;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.AddHookahServiceDefaults("promo-service");
+builder.AddPostgresDbContext<PromoDbContext>();
 
 var app = builder.Build();
 app.UseHookahServiceDefaults();
+app.MapPersistenceHealth<PromoDbContext>("promo-service");
 
 var promocodes = new Dictionary<string, Promocode>(StringComparer.OrdinalIgnoreCase);
 var redemptions = new List<PromocodeRedemption>();

@@ -1,13 +1,17 @@
 using HookahPlatform.BuildingBlocks;
+using HookahPlatform.BuildingBlocks.Persistence;
+using HookahPlatform.MixologyService.Persistence;
 using HookahPlatform.Contracts;
 using System.Net.Http.Json;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.AddHookahServiceDefaults("mixology-service");
+builder.AddPostgresDbContext<MixologyDbContext>();
 builder.Services.AddHttpClient();
 
 var app = builder.Build();
 app.UseHookahServiceDefaults();
+app.MapPersistenceHealth<MixologyDbContext>("mixology-service");
 
 var bowls = new Dictionary<Guid, Bowl>();
 var tobaccos = new Dictionary<Guid, Tobacco>();
