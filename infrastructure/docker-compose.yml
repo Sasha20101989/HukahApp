@@ -1,0 +1,126 @@
+services:
+  api-gateway:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+      args:
+        PROJECT_PATH: services/api-gateway/src/HookahPlatform.ApiGateway/HookahPlatform.ApiGateway.csproj
+    command: ["HookahPlatform.ApiGateway.dll"]
+    ports:
+      - "8080:8080"
+
+  auth-service:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+      args:
+        PROJECT_PATH: services/auth-service/src/HookahPlatform.AuthService/HookahPlatform.AuthService.csproj
+    command: ["HookahPlatform.AuthService.dll"]
+
+  user-service:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+      args:
+        PROJECT_PATH: services/user-service/src/HookahPlatform.UserService/HookahPlatform.UserService.csproj
+    command: ["HookahPlatform.UserService.dll"]
+
+  branch-service:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+      args:
+        PROJECT_PATH: services/branch-service/src/HookahPlatform.BranchService/HookahPlatform.BranchService.csproj
+    command: ["HookahPlatform.BranchService.dll"]
+
+  mixology-service:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+      args:
+        PROJECT_PATH: services/mixology-service/src/HookahPlatform.MixologyService/HookahPlatform.MixologyService.csproj
+    command: ["HookahPlatform.MixologyService.dll"]
+
+  inventory-service:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+      args:
+        PROJECT_PATH: services/inventory-service/src/HookahPlatform.InventoryService/HookahPlatform.InventoryService.csproj
+    command: ["HookahPlatform.InventoryService.dll"]
+
+  order-service:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+      args:
+        PROJECT_PATH: services/order-service/src/HookahPlatform.OrderService/HookahPlatform.OrderService.csproj
+    command: ["HookahPlatform.OrderService.dll"]
+
+  booking-service:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+      args:
+        PROJECT_PATH: services/booking-service/src/HookahPlatform.BookingService/HookahPlatform.BookingService.csproj
+    command: ["HookahPlatform.BookingService.dll"]
+
+  payment-service:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+      args:
+        PROJECT_PATH: services/payment-service/src/HookahPlatform.PaymentService/HookahPlatform.PaymentService.csproj
+    command: ["HookahPlatform.PaymentService.dll"]
+
+  notification-service:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+      args:
+        PROJECT_PATH: services/notification-service/src/HookahPlatform.NotificationService/HookahPlatform.NotificationService.csproj
+    command: ["HookahPlatform.NotificationService.dll"]
+
+  analytics-service:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+      args:
+        PROJECT_PATH: services/analytics-service/src/HookahPlatform.AnalyticsService/HookahPlatform.AnalyticsService.csproj
+    command: ["HookahPlatform.AnalyticsService.dll"]
+
+  review-service:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+      args:
+        PROJECT_PATH: services/review-service/src/HookahPlatform.ReviewService/HookahPlatform.ReviewService.csproj
+    command: ["HookahPlatform.ReviewService.dll"]
+
+  promo-service:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+      args:
+        PROJECT_PATH: services/promo-service/src/HookahPlatform.PromoService/HookahPlatform.PromoService.csproj
+    command: ["HookahPlatform.PromoService.dll"]
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: hookah
+      POSTGRES_USER: hookah
+      POSTGRES_PASSWORD: hookah
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
