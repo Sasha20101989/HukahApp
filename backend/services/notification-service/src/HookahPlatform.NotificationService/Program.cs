@@ -68,6 +68,11 @@ app.MapPost("/api/notifications/send", async (SendNotificationRequest request, N
 
 app.MapPost("/api/notifications/dispatch-event", async (NotificationEventRequest request, NotificationDbContext db, CancellationToken cancellationToken) =>
 {
+    if (await db.ProcessedEvents.AnyAsync(item => item.Handler == "notification-service" && item.EventId == request.EventId, cancellationToken))
+    {
+        return Results.Accepted("/api/notifications", new { request.EventId, duplicate = true });
+    }
+
     var templateCode = request.Event switch
     {
         nameof(BookingCreated) => "booking.created.manager",
@@ -93,6 +98,7 @@ app.MapPost("/api/notifications/dispatch-event", async (NotificationEventRequest
         db.Notifications.Add(notification);
         created.Add(notification);
     }
+    db.ProcessedEvents.Add(new ProcessedIntegrationEventEntity { Handler = "notification-service", EventId = request.EventId, ProcessedAt = DateTimeOffset.UtcNow });
     await db.SaveChangesAsync(cancellationToken);
     return Results.Accepted("/api/notifications", created);
 });
@@ -131,4 +137,4 @@ static string Render(string template, IReadOnlyDictionary<string, string> values
 
 public sealed record SendNotificationRequest(Guid UserId, string Channel, string Title, string Message, IReadOnlyDictionary<string, string> Metadata);
 public sealed record UpdateNotificationPreferenceRequest(bool CrmEnabled, bool TelegramEnabled, bool SmsEnabled, bool EmailEnabled, bool PushEnabled);
-public sealed record NotificationEventRequest(string Event, IReadOnlyCollection<Guid> UserIds, IReadOnlyDictionary<string, string> Values);
+public sealed record NotificationEventRequest(Guid EventId, string Event, IReadOnlyCollection<Guid> UserIds, IReadOnlyDictionary<string, string> Values);

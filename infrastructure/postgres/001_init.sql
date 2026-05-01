@@ -13,6 +13,13 @@ create table if not exists integration_outbox (
     error text null
 );
 
+create table if not exists processed_integration_events (
+    handler varchar(160) not null,
+    event_id uuid not null,
+    processed_at timestamp with time zone not null default now(),
+    primary key (handler, event_id)
+);
+
 create table if not exists roles (
     id uuid primary key,
     name varchar(120) not null,
@@ -393,6 +400,7 @@ create index if not exists ix_analytics_orders_branch_created_at on analytics_or
 create index if not exists ix_analytics_bookings_branch_created_at on analytics_bookings(branch_id, created_at);
 create index if not exists ix_integration_outbox_pending on integration_outbox(processed_at, created_at);
 create index if not exists ix_refresh_tokens_user_active on refresh_tokens(user_id, revoked_at, expires_at);
+create index if not exists ix_processed_integration_events_processed_at on processed_integration_events(processed_at);
 
 do $$
 begin

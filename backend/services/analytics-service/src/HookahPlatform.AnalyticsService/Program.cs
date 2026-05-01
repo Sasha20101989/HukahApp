@@ -14,11 +14,19 @@ app.MapPersistenceHealth<AnalyticsDbContext>("analytics-service");
 
 app.MapPost("/api/analytics/events", async (AnalyticsEventEnvelope envelope, AnalyticsDbContext db, CancellationToken cancellationToken) =>
 {
+    if (await db.ProcessedEvents.AnyAsync(item => item.Handler == "analytics-service" && item.EventId == envelope.EventId, cancellationToken))
+    {
+        return Results.Accepted($"/api/analytics/events/{envelope.Event}", new { envelope.EventId, duplicate = true });
+    }
+
     switch (envelope.Event)
     {
         case nameof(OrderCreated):
             if (envelope.OrderId is null || envelope.BranchId is null || envelope.TableId is null || envelope.MixId is null) return HttpResults.Validation("OrderCreated analytics event requires orderId, branchId, tableId and mixId.");
-            db.Orders.Add(new AnalyticsOrderEntity { Id = envelope.OrderId.Value, BranchId = envelope.BranchId.Value, TableId = envelope.TableId.Value, MixId = envelope.MixId.Value, HookahMasterId = envelope.HookahMasterId, TotalPrice = envelope.TotalPrice ?? 0, Status = OrderStatuses.New, CreatedAt = envelope.OccurredAt });
+            if (!await db.Orders.AnyAsync(candidate => candidate.Id == envelope.OrderId.Value, cancellationToken))
+            {
+                db.Orders.Add(new AnalyticsOrderEntity { Id = envelope.OrderId.Value, BranchId = envelope.BranchId.Value, TableId = envelope.TableId.Value, MixId = envelope.MixId.Value, HookahMasterId = envelope.HookahMasterId, TotalPrice = envelope.TotalPrice ?? 0, Status = OrderStatuses.New, CreatedAt = envelope.OccurredAt });
+            }
             break;
         case nameof(OrderStatusChanged):
             if (envelope.OrderId is null || string.IsNullOrWhiteSpace(envelope.Status)) return HttpResults.Validation("OrderStatusChanged analytics event requires orderId and status.");
@@ -37,7 +45,10 @@ app.MapPost("/api/analytics/events", async (AnalyticsEventEnvelope envelope, Ana
             break;
         case nameof(BookingCreated):
             if (envelope.BookingId is null || envelope.BranchId is null || envelope.TableId is null) return HttpResults.Validation("BookingCreated analytics event requires bookingId, branchId and tableId.");
-            db.Bookings.Add(new AnalyticsBookingEntity { Id = envelope.BookingId.Value, BranchId = envelope.BranchId.Value, TableId = envelope.TableId.Value, Status = BookingStatuses.New, StartTime = envelope.StartTime, EndTime = envelope.EndTime, CreatedAt = envelope.OccurredAt });
+            if (!await db.Bookings.AnyAsync(candidate => candidate.Id == envelope.BookingId.Value, cancellationToken))
+            {
+                db.Bookings.Add(new AnalyticsBookingEntity { Id = envelope.BookingId.Value, BranchId = envelope.BranchId.Value, TableId = envelope.TableId.Value, Status = BookingStatuses.New, StartTime = envelope.StartTime, EndTime = envelope.EndTime, CreatedAt = envelope.OccurredAt });
+            }
             break;
         case nameof(BookingConfirmed):
         case nameof(BookingCancelled):
@@ -47,6 +58,7 @@ app.MapPost("/api/analytics/events", async (AnalyticsEventEnvelope envelope, Ana
             break;
     }
 
+    db.ProcessedEvents.Add(new ProcessedIntegrationEventEntity { Handler = "analytics-service", EventId = envelope.EventId, ProcessedAt = DateTimeOffset.UtcNow });
     await db.SaveChangesAsync(cancellationToken);
     return Results.Accepted($"/api/analytics/events/{envelope.Event}", envelope);
 });
@@ -91,4 +103,4 @@ public sealed record TopMix(Guid MixId, string Name, int OrdersCount, decimal Ra
 public sealed record TobaccoUsage(Guid BranchId, Guid TobaccoId, decimal Grams);
 public sealed record StaffPerformance(Guid StaffId, string StaffName, int OrdersServed, decimal Rating, TimeSpan AveragePrepareTime);
 public sealed record TableLoad(Guid BranchId, Guid TableId, string TableName, decimal LoadPercent);
-public sealed record AnalyticsEventEnvelope(string Event, DateTimeOffset OccurredAt, Guid? OrderId, Guid? BookingId, Guid? BranchId, Guid? TableId, Guid? MixId, Guid? TobaccoId, Guid? HookahMasterId, decimal? TotalPrice, decimal? AmountGrams, int? Rating, string? Status, DateTimeOffset? StartTime, DateTimeOffset? EndTime);
+public sealed record AnalyticsEventEnvelope(Guid EventId, string Event, DateTimeOffset OccurredAt, Guid? OrderId, Guid? BookingId, Guid? BranchId, Guid? TableId, Guid? MixId, Guid? TobaccoId, Guid? HookahMasterId, decimal? TotalPrice, decimal? AmountGrams, int? Rating, string? Status, DateTimeOffset? StartTime, DateTimeOffset? EndTime);

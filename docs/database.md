@@ -4,7 +4,7 @@ The PostgreSQL baseline schema is defined in `infrastructure/postgres/001_init.s
 
 Service DbContexts map to these tables:
 
-- Shared events: `integration_outbox`
+- Shared events: `integration_outbox`, `processed_integration_events`
 - Auth/User: `users`, `roles`, `permissions`, `role_permissions`, `refresh_tokens`
 - User: `users`, `roles`, `permissions`, `role_permissions`, `staff_shifts`
 - Branch: `branches`, `halls`, `zones`, `branch_working_hours`, `tables`, `hookahs`

@@ -29,3 +29,5 @@ Implemented event contracts:
 RabbitMQ delivery should be implemented as an outbox dispatcher that reads pending `integration_outbox` rows, publishes to `hookah.platform.events` with the routing key from `MessagingCatalog`, and sets `processed_at` only after broker confirmation.
 
 The current dispatcher implementation can replay pending outbox rows through the same HTTP fan-out path via `POST /outbox/dispatch`. A background dispatcher is registered but disabled by default; enable it in exactly one service process with `Outbox__Dispatcher__Enabled=true` to avoid competing workers while RabbitMQ publishing is still replaced by local HTTP fan-out.
+
+Analytics and Notification consumers receive `eventId` in fan-out payloads and persist handled ids in `processed_integration_events`. This makes retries safe: duplicate deliveries return success without re-applying counters or creating duplicate CRM notifications.
