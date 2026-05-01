@@ -2,6 +2,7 @@ using HookahPlatform.BuildingBlocks;
 using HookahPlatform.BuildingBlocks.Persistence;
 using HookahPlatform.InventoryService.Persistence;
 using HookahPlatform.Contracts;
+using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.AddHookahServiceDefaults("inventory-service");
@@ -11,13 +12,9 @@ var app = builder.Build();
 app.UseHookahServiceDefaults();
 app.MapPersistenceHealth<InventoryDbContext>("inventory-service");
 
-var items = new Dictionary<(Guid BranchId, Guid TobaccoId), InventoryItem>();
-var movements = new List<InventoryMovement>();
-SeedInventory(items);
-
-app.MapGet("/api/inventory", (Guid? branchId, bool? lowStockOnly) =>
+app.MapGet("/api/inventory", async (Guid? branchId, bool? lowStockOnly, InventoryDbContext db, CancellationToken cancellationToken) =>
 {
-    var query = items.Values.AsEnumerable();
+    var query = db.InventoryItems.AsNoTracking();
     if (branchId is not null)
     {
         query = query.Where(item => item.BranchId == branchId);
@@ -27,21 +24,25 @@ app.MapGet("/api/inventory", (Guid? branchId, bool? lowStockOnly) =>
         query = query.Where(item => item.StockGrams < item.MinStockGrams);
     }
 
-    return Results.Ok(query.OrderBy(item => item.BranchId).ThenBy(item => item.TobaccoId));
+    return Results.Ok(await query.OrderBy(item => item.BranchId).ThenBy(item => item.TobaccoId).ToListAsync(cancellationToken));
 });
 
-app.MapPost("/api/inventory/check", (InventoryAvailabilityRequest request) =>
+app.MapPost("/api/inventory/check", async (InventoryAvailabilityRequest request, InventoryDbContext db, CancellationToken cancellationToken) =>
 {
     if (request.Items.Count == 0)
     {
         return HttpResults.Validation("Availability check must contain at least one tobacco item.");
     }
 
+    var tobaccoIds = request.Items.Select(item => item.TobaccoId).ToArray();
+    var stockByTobaccoId = await db.InventoryItems
+        .AsNoTracking()
+        .Where(item => item.BranchId == request.BranchId && tobaccoIds.Contains(item.TobaccoId))
+        .ToDictionaryAsync(item => item.TobaccoId, item => item.StockGrams, cancellationToken);
+
     var checkedItems = request.Items.Select(required =>
     {
-        var stock = items.TryGetValue((request.BranchId, required.TobaccoId), out var item)
-            ? item.StockGrams
-            : 0m;
+        var stock = stockByTobaccoId.TryGetValue(required.TobaccoId, out var stockGrams) ? stockGrams : 0m;
 
         return new InventoryAvailabilityItem(
             required.TobaccoId,
@@ -57,52 +58,64 @@ app.MapPost("/api/inventory/check", (InventoryAvailabilityRequest request) =>
         checkedItems));
 });
 
-app.MapPost("/api/inventory/in", async (InventoryInRequest request, IEventPublisher events) =>
+app.MapPost("/api/inventory/in", async (InventoryInRequest request, InventoryDbContext db, IEventPublisher events, CancellationToken cancellationToken) =>
 {
-    var item = GetOrCreateItem(items, request.BranchId, request.TobaccoId);
-    var updated = item with { StockGrams = item.StockGrams + request.AmountGrams, UpdatedAt = DateTimeOffset.UtcNow };
-    items[(request.BranchId, request.TobaccoId)] = updated;
+    var item = await GetOrCreateItemAsync(db, request.BranchId, request.TobaccoId, cancellationToken);
+    item.StockGrams += request.AmountGrams;
+    item.UpdatedAt = DateTimeOffset.UtcNow;
 
-    movements.Add(new InventoryMovement(Guid.NewGuid(), request.BranchId, request.TobaccoId, "IN", request.AmountGrams, request.Comment ?? $"Supplier: {request.Supplier}", null, null, DateTimeOffset.UtcNow));
-    await PublishLowStockIfNeeded(updated, events);
+    db.InventoryMovements.Add(new InventoryMovementEntity { Id = Guid.NewGuid(), BranchId = request.BranchId, TobaccoId = request.TobaccoId, Type = "IN", AmountGrams = request.AmountGrams, Reason = request.Comment ?? $"Supplier: {request.Supplier}", OrderId = null, CreatedBy = null, CreatedAt = DateTimeOffset.UtcNow });
+    var outboxEvents = BuildLowStockEvents(item);
+    var outboxMessages = db.AddOutboxMessages(outboxEvents);
+    await db.SaveChangesAsync(cancellationToken);
+    await db.ForwardAndMarkOutboxAsync(events, outboxEvents, outboxMessages, cancellationToken);
 
-    return Results.Ok(updated);
+    return Results.Ok(item);
 });
 
-app.MapPost("/api/inventory/out", async (InventoryOutRequest request, IEventPublisher events) =>
+app.MapPost("/api/inventory/out", async (InventoryOutRequest request, InventoryDbContext db, IEventPublisher events, CancellationToken cancellationToken) =>
 {
-    var item = GetOrCreateItem(items, request.BranchId, request.TobaccoId);
+    var item = await GetOrCreateItemAsync(db, request.BranchId, request.TobaccoId, cancellationToken);
     if (item.StockGrams < request.AmountGrams)
     {
         return HttpResults.Conflict("Not enough tobacco in stock.");
     }
 
-    var updated = item with { StockGrams = item.StockGrams - request.AmountGrams, UpdatedAt = DateTimeOffset.UtcNow };
-    items[(request.BranchId, request.TobaccoId)] = updated;
+    item.StockGrams -= request.AmountGrams;
+    item.UpdatedAt = DateTimeOffset.UtcNow;
 
-    movements.Add(new InventoryMovement(Guid.NewGuid(), request.BranchId, request.TobaccoId, "OUT", request.AmountGrams, request.Reason, request.OrderId, request.CreatedBy, DateTimeOffset.UtcNow));
-    await events.PublishAsync(new InventoryWrittenOff(request.BranchId, request.TobaccoId, request.OrderId, request.AmountGrams, DateTimeOffset.UtcNow));
-    await PublishLowStockIfNeeded(updated, events);
+    db.InventoryMovements.Add(new InventoryMovementEntity { Id = Guid.NewGuid(), BranchId = request.BranchId, TobaccoId = request.TobaccoId, Type = "OUT", AmountGrams = request.AmountGrams, Reason = request.Reason, OrderId = request.OrderId, CreatedBy = request.CreatedBy, CreatedAt = DateTimeOffset.UtcNow });
+    var outboxEvents = new List<IIntegrationEvent>
+    {
+        new InventoryWrittenOff(request.BranchId, request.TobaccoId, request.OrderId, request.AmountGrams, DateTimeOffset.UtcNow)
+    };
+    outboxEvents.AddRange(BuildLowStockEvents(item));
+    var outboxMessages = db.AddOutboxMessages(outboxEvents);
+    await db.SaveChangesAsync(cancellationToken);
+    await db.ForwardAndMarkOutboxAsync(events, outboxEvents, outboxMessages, cancellationToken);
 
-    return Results.Ok(updated);
+    return Results.Ok(item);
 });
 
-app.MapPost("/api/inventory/adjustment", async (InventoryAdjustmentRequest request, IEventPublisher events) =>
+app.MapPost("/api/inventory/adjustment", async (InventoryAdjustmentRequest request, InventoryDbContext db, IEventPublisher events, CancellationToken cancellationToken) =>
 {
-    var item = GetOrCreateItem(items, request.BranchId, request.TobaccoId);
+    var item = await GetOrCreateItemAsync(db, request.BranchId, request.TobaccoId, cancellationToken);
     var delta = request.NewStockGrams - item.StockGrams;
-    var updated = item with { StockGrams = request.NewStockGrams, UpdatedAt = DateTimeOffset.UtcNow };
-    items[(request.BranchId, request.TobaccoId)] = updated;
+    item.StockGrams = request.NewStockGrams;
+    item.UpdatedAt = DateTimeOffset.UtcNow;
 
-    movements.Add(new InventoryMovement(Guid.NewGuid(), request.BranchId, request.TobaccoId, "ADJUSTMENT", delta, "Manual adjustment", null, request.CreatedBy, DateTimeOffset.UtcNow));
-    await PublishLowStockIfNeeded(updated, events);
+    db.InventoryMovements.Add(new InventoryMovementEntity { Id = Guid.NewGuid(), BranchId = request.BranchId, TobaccoId = request.TobaccoId, Type = "ADJUSTMENT", AmountGrams = delta, Reason = "Manual adjustment", OrderId = null, CreatedBy = request.CreatedBy, CreatedAt = DateTimeOffset.UtcNow });
+    var outboxEvents = BuildLowStockEvents(item);
+    var outboxMessages = db.AddOutboxMessages(outboxEvents);
+    await db.SaveChangesAsync(cancellationToken);
+    await db.ForwardAndMarkOutboxAsync(events, outboxEvents, outboxMessages, cancellationToken);
 
-    return Results.Ok(updated);
+    return Results.Ok(item);
 });
 
-app.MapGet("/api/inventory/movements", (Guid? branchId, Guid? tobaccoId, DateOnly? from, DateOnly? to) =>
+app.MapGet("/api/inventory/movements", async (Guid? branchId, Guid? tobaccoId, DateOnly? from, DateOnly? to, InventoryDbContext db, CancellationToken cancellationToken) =>
 {
-    var query = movements.AsEnumerable();
+    var query = db.InventoryMovements.AsNoTracking();
     if (branchId is not null)
     {
         query = query.Where(movement => movement.BranchId == branchId);
@@ -120,48 +133,34 @@ app.MapGet("/api/inventory/movements", (Guid? branchId, Guid? tobaccoId, DateOnl
         query = query.Where(movement => DateOnly.FromDateTime(movement.CreatedAt.UtcDateTime) <= to);
     }
 
-    return Results.Ok(query.OrderByDescending(movement => movement.CreatedAt));
+    return Results.Ok(await query.OrderByDescending(movement => movement.CreatedAt).ToListAsync(cancellationToken));
 });
 
 app.Run();
 
-static InventoryItem GetOrCreateItem(IDictionary<(Guid BranchId, Guid TobaccoId), InventoryItem> items, Guid branchId, Guid tobaccoId)
+static async Task<InventoryItemEntity> GetOrCreateItemAsync(InventoryDbContext db, Guid branchId, Guid tobaccoId, CancellationToken cancellationToken)
 {
-    var key = (branchId, tobaccoId);
-    if (items.TryGetValue(key, out var item))
+    var item = await db.InventoryItems.FirstOrDefaultAsync(candidate => candidate.BranchId == branchId && candidate.TobaccoId == tobaccoId, cancellationToken);
+    if (item is not null)
     {
         return item;
     }
 
-    item = new InventoryItem(Guid.NewGuid(), branchId, tobaccoId, 0, 50, DateTimeOffset.UtcNow);
-    items[key] = item;
+    item = new InventoryItemEntity { Id = Guid.NewGuid(), BranchId = branchId, TobaccoId = tobaccoId, StockGrams = 0, MinStockGrams = 50, UpdatedAt = DateTimeOffset.UtcNow };
+    db.InventoryItems.Add(item);
     return item;
 }
 
-static async Task PublishLowStockIfNeeded(InventoryItem item, IEventPublisher events)
+static IReadOnlyCollection<IIntegrationEvent> BuildLowStockEvents(InventoryItemEntity item)
 {
     if (item.StockGrams < item.MinStockGrams)
     {
-        await events.PublishAsync(new LowStockDetected(item.BranchId, item.TobaccoId, item.StockGrams, item.MinStockGrams, DateTimeOffset.UtcNow));
+        return [new LowStockDetected(item.BranchId, item.TobaccoId, item.StockGrams, item.MinStockGrams, DateTimeOffset.UtcNow)];
     }
+
+    return [];
 }
 
-static void SeedInventory(IDictionary<(Guid BranchId, Guid TobaccoId), InventoryItem> items)
-{
-    var branchId = Guid.Parse("10000000-0000-0000-0000-000000000001");
-    foreach (var tobaccoId in new[]
-    {
-        Guid.Parse("60000000-0000-0000-0000-000000000001"),
-        Guid.Parse("60000000-0000-0000-0000-000000000002"),
-        Guid.Parse("60000000-0000-0000-0000-000000000003")
-    })
-    {
-        items[(branchId, tobaccoId)] = new InventoryItem(Guid.NewGuid(), branchId, tobaccoId, 250, 50, DateTimeOffset.UtcNow);
-    }
-}
-
-public sealed record InventoryItem(Guid Id, Guid BranchId, Guid TobaccoId, decimal StockGrams, decimal MinStockGrams, DateTimeOffset UpdatedAt);
-public sealed record InventoryMovement(Guid Id, Guid BranchId, Guid TobaccoId, string Type, decimal AmountGrams, string? Reason, Guid? OrderId, Guid? CreatedBy, DateTimeOffset CreatedAt);
 public sealed record InventoryAvailabilityRequest(Guid BranchId, IReadOnlyCollection<InventoryAvailabilityRequestItem> Items);
 public sealed record InventoryAvailabilityRequestItem(Guid TobaccoId, decimal RequiredGrams);
 public sealed record InventoryAvailabilityResponse(Guid BranchId, bool IsAvailable, IReadOnlyCollection<InventoryAvailabilityItem> Items);

@@ -1,3 +1,4 @@
+using HookahPlatform.BuildingBlocks.Persistence;
 using Microsoft.EntityFrameworkCore;
 
 namespace HookahPlatform.MixologyService.Persistence;
@@ -11,6 +12,7 @@ public sealed class MixologyDbContext(DbContextOptions<MixologyDbContext> option
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        modelBuilder.ConfigureIntegrationOutbox();
         modelBuilder.Entity<BowlEntity>(entity => { entity.ToTable("bowls"); entity.HasKey(bowl => bowl.Id); entity.Property(bowl => bowl.CapacityGrams).HasColumnName("capacity_grams"); entity.Property(bowl => bowl.RecommendedStrength).HasColumnName("recommended_strength"); entity.Property(bowl => bowl.AverageSmokeMinutes).HasColumnName("average_smoke_minutes"); entity.Property(bowl => bowl.IsActive).HasColumnName("is_active"); });
         modelBuilder.Entity<TobaccoEntity>(entity => { entity.ToTable("tobaccos"); entity.HasKey(tobacco => tobacco.Id); entity.Property(tobacco => tobacco.CostPerGram).HasColumnName("cost_per_gram"); entity.Property(tobacco => tobacco.IsActive).HasColumnName("is_active"); entity.Property(tobacco => tobacco.PhotoUrl).HasColumnName("photo_url"); });
         modelBuilder.Entity<MixEntity>(entity => { entity.ToTable("mixes"); entity.HasKey(mix => mix.Id); entity.Property(mix => mix.BowlId).HasColumnName("bowl_id"); entity.Property(mix => mix.TasteProfile).HasColumnName("taste_profile"); entity.Property(mix => mix.TotalGrams).HasColumnName("total_grams"); entity.Property(mix => mix.IsPublic).HasColumnName("is_public"); entity.Property(mix => mix.IsActive).HasColumnName("is_active"); entity.Property(mix => mix.CreatedBy).HasColumnName("created_by"); entity.Property(mix => mix.CreatedAt).HasColumnName("created_at"); });

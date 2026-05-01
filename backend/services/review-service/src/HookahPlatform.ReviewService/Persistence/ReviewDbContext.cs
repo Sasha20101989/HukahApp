@@ -1,3 +1,4 @@
+using HookahPlatform.BuildingBlocks.Persistence;
 using Microsoft.EntityFrameworkCore;
 
 namespace HookahPlatform.ReviewService.Persistence;
@@ -8,6 +9,7 @@ public sealed class ReviewDbContext(DbContextOptions<ReviewDbContext> options) :
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        modelBuilder.ConfigureIntegrationOutbox();
         modelBuilder.Entity<ReviewEntity>(entity => { entity.ToTable("reviews"); entity.HasKey(review => review.Id); entity.Property(review => review.ClientId).HasColumnName("client_id"); entity.Property(review => review.MixId).HasColumnName("mix_id"); entity.Property(review => review.OrderId).HasColumnName("order_id"); entity.Property(review => review.CreatedAt).HasColumnName("created_at"); });
     }
 }

@@ -1,3 +1,4 @@
+using HookahPlatform.BuildingBlocks.Persistence;
 using Microsoft.EntityFrameworkCore;
 
 namespace HookahPlatform.UserService.Persistence;
@@ -12,6 +13,7 @@ public sealed class UserDbContext(DbContextOptions<UserDbContext> options) : DbC
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        modelBuilder.ConfigureIntegrationOutbox();
         modelBuilder.Entity<UserEntity>(entity =>
         {
             entity.ToTable("users");

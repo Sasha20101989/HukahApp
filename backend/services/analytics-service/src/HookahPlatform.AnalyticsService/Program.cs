@@ -1,7 +1,8 @@
+using HookahPlatform.AnalyticsService.Persistence;
 using HookahPlatform.BuildingBlocks;
 using HookahPlatform.BuildingBlocks.Persistence;
-using HookahPlatform.AnalyticsService.Persistence;
 using HookahPlatform.Contracts;
+using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.AddHookahServiceDefaults("analytics-service");
@@ -11,215 +12,83 @@ var app = builder.Build();
 app.UseHookahServiceDefaults();
 app.MapPersistenceHealth<AnalyticsDbContext>("analytics-service");
 
-var orders = new Dictionary<Guid, AnalyticsOrder>();
-var bookings = new Dictionary<Guid, AnalyticsBooking>();
-var tobaccoUsage = new Dictionary<(Guid BranchId, Guid TobaccoId), decimal>();
-var mixStats = new Dictionary<Guid, MixMetric>();
-var staffStats = new Dictionary<Guid, StaffMetric>();
-var tableUsage = new Dictionary<(Guid BranchId, Guid TableId), TableMetric>();
-SeedAnalytics(orders, bookings, tobaccoUsage, mixStats, staffStats, tableUsage);
-
-app.MapPost("/api/analytics/events", (AnalyticsEventEnvelope envelope) =>
+app.MapPost("/api/analytics/events", async (AnalyticsEventEnvelope envelope, AnalyticsDbContext db, CancellationToken cancellationToken) =>
 {
     switch (envelope.Event)
     {
         case nameof(OrderCreated):
-            if (envelope.OrderId is null || envelope.BranchId is null || envelope.TableId is null || envelope.MixId is null)
-            {
-                return HttpResults.Validation("OrderCreated analytics event requires orderId, branchId, tableId and mixId.");
-            }
-
-            orders[envelope.OrderId.Value] = new AnalyticsOrder(envelope.OrderId.Value, envelope.BranchId.Value, envelope.TableId.Value, envelope.MixId.Value, envelope.HookahMasterId, envelope.TotalPrice ?? 0, OrderStatuses.New, envelope.OccurredAt);
-            IncrementMix(mixStats, envelope.MixId.Value, 1, 0);
-            IncrementTable(tableUsage, envelope.BranchId.Value, envelope.TableId.Value, TimeSpan.Zero);
+            if (envelope.OrderId is null || envelope.BranchId is null || envelope.TableId is null || envelope.MixId is null) return HttpResults.Validation("OrderCreated analytics event requires orderId, branchId, tableId and mixId.");
+            db.Orders.Add(new AnalyticsOrderEntity { Id = envelope.OrderId.Value, BranchId = envelope.BranchId.Value, TableId = envelope.TableId.Value, MixId = envelope.MixId.Value, HookahMasterId = envelope.HookahMasterId, TotalPrice = envelope.TotalPrice ?? 0, Status = OrderStatuses.New, CreatedAt = envelope.OccurredAt });
             break;
-
         case nameof(OrderStatusChanged):
-            if (envelope.OrderId is null || string.IsNullOrWhiteSpace(envelope.Status) || !orders.TryGetValue(envelope.OrderId.Value, out var order))
-            {
-                return HttpResults.Validation("OrderStatusChanged analytics event requires an existing order and status.");
-            }
-
-            orders[order.Id] = order with { Status = envelope.Status };
+            if (envelope.OrderId is null || string.IsNullOrWhiteSpace(envelope.Status)) return HttpResults.Validation("OrderStatusChanged analytics event requires orderId and status.");
+            var order = await db.Orders.FirstOrDefaultAsync(candidate => candidate.Id == envelope.OrderId.Value, cancellationToken);
+            if (order is not null) order.Status = envelope.Status;
             break;
-
         case nameof(InventoryWrittenOff):
-            if (envelope.BranchId is null || envelope.TobaccoId is null || envelope.AmountGrams is null)
+            if (envelope.BranchId is null || envelope.TobaccoId is null || envelope.AmountGrams is null) return HttpResults.Validation("InventoryWrittenOff analytics event requires branchId, tobaccoId and amountGrams.");
+            var usage = await db.TobaccoUsage.FirstOrDefaultAsync(candidate => candidate.BranchId == envelope.BranchId.Value && candidate.TobaccoId == envelope.TobaccoId.Value, cancellationToken);
+            if (usage is null)
             {
-                return HttpResults.Validation("InventoryWrittenOff analytics event requires branchId, tobaccoId and amountGrams.");
+                usage = new AnalyticsTobaccoUsageEntity { BranchId = envelope.BranchId.Value, TobaccoId = envelope.TobaccoId.Value, Grams = 0 };
+                db.TobaccoUsage.Add(usage);
             }
-
-            tobaccoUsage[(envelope.BranchId.Value, envelope.TobaccoId.Value)] = tobaccoUsage.GetValueOrDefault((envelope.BranchId.Value, envelope.TobaccoId.Value)) + envelope.AmountGrams.Value;
+            usage.Grams += envelope.AmountGrams.Value;
             break;
-
         case nameof(BookingCreated):
-            if (envelope.BookingId is null || envelope.BranchId is null || envelope.TableId is null)
-            {
-                return HttpResults.Validation("BookingCreated analytics event requires bookingId, branchId and tableId.");
-            }
-
-            bookings[envelope.BookingId.Value] = new AnalyticsBooking(envelope.BookingId.Value, envelope.BranchId.Value, envelope.TableId.Value, BookingStatuses.New, envelope.StartTime, envelope.EndTime, envelope.OccurredAt);
+            if (envelope.BookingId is null || envelope.BranchId is null || envelope.TableId is null) return HttpResults.Validation("BookingCreated analytics event requires bookingId, branchId and tableId.");
+            db.Bookings.Add(new AnalyticsBookingEntity { Id = envelope.BookingId.Value, BranchId = envelope.BranchId.Value, TableId = envelope.TableId.Value, Status = BookingStatuses.New, StartTime = envelope.StartTime, EndTime = envelope.EndTime, CreatedAt = envelope.OccurredAt });
             break;
-
         case nameof(BookingConfirmed):
         case nameof(BookingCancelled):
-            if (envelope.BookingId is null || !bookings.TryGetValue(envelope.BookingId.Value, out var booking))
-            {
-                return HttpResults.Validation($"{envelope.Event} analytics event requires an existing booking.");
-            }
-
-            bookings[booking.Id] = booking with
-            {
-                Status = envelope.Event == nameof(BookingConfirmed) ? BookingStatuses.Confirmed : BookingStatuses.Cancelled
-            };
-            break;
-
-        case nameof(ReviewCreated):
-            if (envelope.MixId is not null && envelope.Rating is not null)
-            {
-                IncrementMix(mixStats, envelope.MixId.Value, 0, envelope.Rating.Value);
-            }
+            if (envelope.BookingId is null) return HttpResults.Validation($"{envelope.Event} analytics event requires bookingId.");
+            var booking = await db.Bookings.FirstOrDefaultAsync(candidate => candidate.Id == envelope.BookingId.Value, cancellationToken);
+            if (booking is not null) booking.Status = envelope.Event == nameof(BookingConfirmed) ? BookingStatuses.Confirmed : BookingStatuses.Cancelled;
             break;
     }
 
+    await db.SaveChangesAsync(cancellationToken);
     return Results.Accepted($"/api/analytics/events/{envelope.Event}", envelope);
 });
 
-app.MapGet("/api/analytics/dashboard", (Guid? branchId, DateOnly from, DateOnly to) =>
+app.MapGet("/api/analytics/dashboard", async (Guid? branchId, DateOnly from, DateOnly to, AnalyticsDbContext db, CancellationToken cancellationToken) =>
 {
     var fromDate = from.ToDateTime(TimeOnly.MinValue);
     var toDate = to.ToDateTime(TimeOnly.MaxValue);
-    var scopedOrders = orders.Values
-        .Where(order => branchId is null || order.BranchId == branchId)
-        .Where(order => order.CreatedAt.UtcDateTime >= fromDate && order.CreatedAt.UtcDateTime <= toDate)
-        .ToArray();
-    var scopedBookings = bookings.Values
-        .Where(booking => branchId is null || booking.BranchId == branchId)
-        .Where(booking => booking.CreatedAt.UtcDateTime >= fromDate && booking.CreatedAt.UtcDateTime <= toDate)
-        .ToArray();
-
+    var scopedOrders = await db.Orders.AsNoTracking().Where(order => (branchId == null || order.BranchId == branchId) && order.CreatedAt.UtcDateTime >= fromDate && order.CreatedAt.UtcDateTime <= toDate).ToListAsync(cancellationToken);
+    var scopedBookings = await db.Bookings.AsNoTracking().Where(booking => (branchId == null || booking.BranchId == branchId) && booking.CreatedAt.UtcDateTime >= fromDate && booking.CreatedAt.UtcDateTime <= toDate).ToListAsync(cancellationToken);
     var revenue = scopedOrders.Where(order => order.Status is OrderStatuses.Served or OrderStatuses.Smoking or OrderStatuses.Completed).Sum(order => order.TotalPrice);
-    var averageCheck = scopedOrders.Length == 0 ? 0 : Math.Round(revenue / scopedOrders.Length, 2);
+    var averageCheck = scopedOrders.Count == 0 ? 0 : Math.Round(revenue / scopedOrders.Count, 2);
     var noShowCount = scopedBookings.Count(booking => booking.Status == BookingStatuses.NoShow);
-    var noShowRate = scopedBookings.Length == 0 ? 0 : Math.Round(noShowCount * 100m / scopedBookings.Length, 2);
-
-    return Results.Ok(new DashboardMetrics(revenue, scopedOrders.Length, averageCheck, scopedBookings.Length, noShowRate, from, to, branchId));
+    var noShowRate = scopedBookings.Count == 0 ? 0 : Math.Round(noShowCount * 100m / scopedBookings.Count, 2);
+    return Results.Ok(new DashboardMetrics(revenue, scopedOrders.Count, averageCheck, scopedBookings.Count, noShowRate, from, to, branchId));
 });
 
-app.MapGet("/api/analytics/top-mixes", () => Results.Ok(mixStats.Values
-    .OrderByDescending(metric => metric.OrdersCount)
-    .ThenByDescending(metric => metric.AverageRating)
-    .Take(20)
-    .Select(metric => new TopMix(metric.MixId, metric.Name, metric.OrdersCount, metric.AverageRating))));
+app.MapGet("/api/analytics/top-mixes", async (AnalyticsDbContext db, CancellationToken cancellationToken) =>
+    Results.Ok(await db.Orders.AsNoTracking().GroupBy(order => order.MixId).Select(group => new TopMix(group.Key, $"Mix {group.Key.ToString().Substring(0, 8)}", group.Count(), 0)).OrderByDescending(metric => metric.OrdersCount).Take(20).ToListAsync(cancellationToken)));
 
-app.MapGet("/api/analytics/tobacco-usage", (Guid? branchId) =>
+app.MapGet("/api/analytics/tobacco-usage", async (Guid? branchId, AnalyticsDbContext db, CancellationToken cancellationToken) =>
 {
-    var query = tobaccoUsage.AsEnumerable();
-    if (branchId is not null)
-    {
-        query = query.Where(item => item.Key.BranchId == branchId);
-    }
-
-    return Results.Ok(query
-        .OrderByDescending(item => item.Value)
-        .Select(item => new TobaccoUsage(item.Key.BranchId, item.Key.TobaccoId, item.Value)));
+    var query = db.TobaccoUsage.AsNoTracking();
+    if (branchId is not null) query = query.Where(item => item.BranchId == branchId);
+    return Results.Ok(await query.OrderByDescending(item => item.Grams).Select(item => new TobaccoUsage(item.BranchId, item.TobaccoId, item.Grams)).ToListAsync(cancellationToken));
 });
 
-app.MapGet("/api/analytics/staff-performance", () => Results.Ok(staffStats.Values
-    .OrderByDescending(metric => metric.OrdersServed)
-    .Select(metric => new StaffPerformance(metric.StaffId, metric.StaffName, metric.OrdersServed, metric.Rating, metric.AveragePrepareTime))));
+app.MapGet("/api/analytics/staff-performance", async (AnalyticsDbContext db, CancellationToken cancellationToken) =>
+    Results.Ok(await db.Orders.AsNoTracking().Where(order => order.HookahMasterId != null).GroupBy(order => order.HookahMasterId!.Value).Select(group => new StaffPerformance(group.Key, $"Staff {group.Key.ToString().Substring(0, 8)}", group.Count(), 0, TimeSpan.Zero)).OrderByDescending(metric => metric.OrdersServed).ToListAsync(cancellationToken)));
 
-app.MapGet("/api/analytics/table-load", (Guid? branchId) =>
+app.MapGet("/api/analytics/table-load", async (Guid? branchId, AnalyticsDbContext db, CancellationToken cancellationToken) =>
 {
-    var query = tableUsage.Values.AsEnumerable();
-    if (branchId is not null)
-    {
-        query = query.Where(metric => metric.BranchId == branchId);
-    }
-
-    return Results.Ok(query
-        .OrderByDescending(metric => metric.LoadPercent)
-        .Select(metric => new TableLoad(metric.BranchId, metric.TableId, metric.TableName, metric.LoadPercent)));
+    var query = db.Bookings.AsNoTracking();
+    if (branchId is not null) query = query.Where(booking => booking.BranchId == branchId);
+    return Results.Ok(await query.GroupBy(booking => new { booking.BranchId, booking.TableId }).Select(group => new TableLoad(group.Key.BranchId, group.Key.TableId, $"Table {group.Key.TableId.ToString().Substring(0, 8)}", Math.Min(100, group.Count() * 5m))).OrderByDescending(metric => metric.LoadPercent).ToListAsync(cancellationToken));
 });
 
 app.Run();
-
-static void IncrementMix(IDictionary<Guid, MixMetric> mixStats, Guid mixId, int orderDelta, int rating)
-{
-    var metric = mixStats.TryGetValue(mixId, out var existing)
-        ? existing
-        : new MixMetric(mixId, $"Mix {mixId.ToString()[..8]}", 0, 0, 0);
-
-    var ratingsCount = rating > 0 ? metric.RatingsCount + 1 : metric.RatingsCount;
-    var ratingSum = rating > 0 ? metric.RatingSum + rating : metric.RatingSum;
-    var averageRating = ratingsCount == 0 ? 0 : Math.Round(ratingSum / ratingsCount, 2);
-
-    mixStats[mixId] = metric with
-    {
-        OrdersCount = metric.OrdersCount + orderDelta,
-        RatingsCount = ratingsCount,
-        RatingSum = ratingSum,
-        AverageRating = averageRating
-    };
-}
-
-static void IncrementTable(IDictionary<(Guid BranchId, Guid TableId), TableMetric> tableUsage, Guid branchId, Guid tableId, TimeSpan occupied)
-{
-    var key = (branchId, tableId);
-    var metric = tableUsage.TryGetValue(key, out var existing)
-        ? existing
-        : new TableMetric(branchId, tableId, $"Table {tableId.ToString()[..8]}", 0);
-
-    tableUsage[key] = metric with { LoadPercent = Math.Min(100, metric.LoadPercent + Math.Max(3, (decimal)occupied.TotalHours * 4)) };
-}
-
-static void SeedAnalytics(
-    IDictionary<Guid, AnalyticsOrder> orders,
-    IDictionary<Guid, AnalyticsBooking> bookings,
-    IDictionary<(Guid BranchId, Guid TobaccoId), decimal> tobaccoUsage,
-    IDictionary<Guid, MixMetric> mixStats,
-    IDictionary<Guid, StaffMetric> staffStats,
-    IDictionary<(Guid BranchId, Guid TableId), TableMetric> tableUsage)
-{
-    var branchId = Guid.Parse("10000000-0000-0000-0000-000000000001");
-    var table1 = Guid.Parse("30000000-0000-0000-0000-000000000001");
-    var table2 = Guid.Parse("30000000-0000-0000-0000-000000000002");
-    var mixId = Guid.Parse("70000000-0000-0000-0000-000000000001");
-    var staffId = Guid.Parse("90000000-0000-0000-0000-000000000010");
-
-    orders[Guid.NewGuid()] = new AnalyticsOrder(Guid.NewGuid(), branchId, table1, mixId, staffId, 850, OrderStatuses.Completed, DateTimeOffset.UtcNow.AddHours(-4));
-    bookings[Guid.NewGuid()] = new AnalyticsBooking(Guid.NewGuid(), branchId, table2, BookingStatuses.Confirmed, DateTimeOffset.UtcNow.AddHours(2), DateTimeOffset.UtcNow.AddHours(4), DateTimeOffset.UtcNow.AddDays(-1));
-    tobaccoUsage[(branchId, Guid.Parse("60000000-0000-0000-0000-000000000001"))] = 1250m;
-    tobaccoUsage[(branchId, Guid.Parse("60000000-0000-0000-0000-000000000002"))] = 840m;
-    mixStats[mixId] = new MixMetric(mixId, "Berry Ice", 86, 23, 110, 4.78m);
-    staffStats[staffId] = new StaffMetric(staffId, "Hookah Master", 118, 4.9m, TimeSpan.FromMinutes(11));
-    tableUsage[(branchId, table1)] = new TableMetric(branchId, table1, "Table 1", 78.4m);
-    tableUsage[(branchId, table2)] = new TableMetric(branchId, table2, "Table 2", 64.2m);
-}
 
 public sealed record DashboardMetrics(decimal Revenue, int OrdersCount, decimal AverageCheck, int BookingsCount, decimal NoShowRate, DateOnly From, DateOnly To, Guid? BranchId);
 public sealed record TopMix(Guid MixId, string Name, int OrdersCount, decimal Rating);
 public sealed record TobaccoUsage(Guid BranchId, Guid TobaccoId, decimal Grams);
 public sealed record StaffPerformance(Guid StaffId, string StaffName, int OrdersServed, decimal Rating, TimeSpan AveragePrepareTime);
 public sealed record TableLoad(Guid BranchId, Guid TableId, string TableName, decimal LoadPercent);
-public sealed record AnalyticsOrder(Guid Id, Guid BranchId, Guid TableId, Guid MixId, Guid? HookahMasterId, decimal TotalPrice, string Status, DateTimeOffset CreatedAt);
-public sealed record AnalyticsBooking(Guid Id, Guid BranchId, Guid TableId, string Status, DateTimeOffset? StartTime, DateTimeOffset? EndTime, DateTimeOffset CreatedAt);
-public sealed record MixMetric(Guid MixId, string Name, int OrdersCount, int RatingsCount, decimal RatingSum, decimal AverageRating = 0);
-public sealed record StaffMetric(Guid StaffId, string StaffName, int OrdersServed, decimal Rating, TimeSpan AveragePrepareTime);
-public sealed record TableMetric(Guid BranchId, Guid TableId, string TableName, decimal LoadPercent);
-public sealed record AnalyticsEventEnvelope(
-    string Event,
-    DateTimeOffset OccurredAt,
-    Guid? OrderId,
-    Guid? BookingId,
-    Guid? BranchId,
-    Guid? TableId,
-    Guid? MixId,
-    Guid? TobaccoId,
-    Guid? HookahMasterId,
-    decimal? TotalPrice,
-    decimal? AmountGrams,
-    int? Rating,
-    string? Status,
-    DateTimeOffset? StartTime,
-    DateTimeOffset? EndTime);
+public sealed record AnalyticsEventEnvelope(string Event, DateTimeOffset OccurredAt, Guid? OrderId, Guid? BookingId, Guid? BranchId, Guid? TableId, Guid? MixId, Guid? TobaccoId, Guid? HookahMasterId, decimal? TotalPrice, decimal? AmountGrams, int? Rating, string? Status, DateTimeOffset? StartTime, DateTimeOffset? EndTime);

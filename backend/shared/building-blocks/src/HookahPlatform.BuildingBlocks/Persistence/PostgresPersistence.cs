@@ -10,6 +10,16 @@ public static class PostgresPersistence
 {
     public const string DefaultConnectionString = "Host=localhost;Port=5432;Database=hookah;Username=hookah;Password=hookah";
 
+    public static WebApplicationBuilder AddOutboxPersistence(this WebApplicationBuilder builder)
+    {
+        var connectionString = builder.Configuration.GetConnectionString("Postgres")
+            ?? builder.Configuration["ConnectionStrings:Postgres"]
+            ?? DefaultConnectionString;
+
+        builder.Services.AddDbContext<OutboxDbContext>(options => options.UseNpgsql(connectionString));
+        return builder;
+    }
+
     public static WebApplicationBuilder AddPostgresDbContext<TContext>(this WebApplicationBuilder builder)
         where TContext : DbContext
     {

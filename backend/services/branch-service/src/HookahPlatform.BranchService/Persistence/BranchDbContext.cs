@@ -1,3 +1,4 @@
+using HookahPlatform.BuildingBlocks.Persistence;
 using Microsoft.EntityFrameworkCore;
 
 namespace HookahPlatform.BranchService.Persistence;
@@ -13,6 +14,7 @@ public sealed class BranchDbContext(DbContextOptions<BranchDbContext> options) :
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        modelBuilder.ConfigureIntegrationOutbox();
         modelBuilder.Entity<BranchEntity>(entity => { entity.ToTable("branches"); entity.HasKey(branch => branch.Id); entity.Property(branch => branch.IsActive).HasColumnName("is_active"); entity.Property(branch => branch.CreatedAt).HasColumnName("created_at"); });
         modelBuilder.Entity<HallEntity>(entity => { entity.ToTable("halls"); entity.HasKey(hall => hall.Id); entity.Property(hall => hall.BranchId).HasColumnName("branch_id"); });
         modelBuilder.Entity<ZoneEntity>(entity => { entity.ToTable("zones"); entity.HasKey(zone => zone.Id); entity.Property(zone => zone.BranchId).HasColumnName("branch_id"); entity.Property(zone => zone.IsActive).HasColumnName("is_active"); });

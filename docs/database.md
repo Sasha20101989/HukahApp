@@ -4,12 +4,13 @@ The PostgreSQL baseline schema is defined in `infrastructure/postgres/001_init.s
 
 Service DbContexts map to these tables:
 
-- Auth/User: `users`, `roles`, `permissions`, `role_permissions`
+- Shared events: `integration_outbox`
+- Auth/User: `users`, `roles`, `permissions`, `role_permissions`, `refresh_tokens`
 - User: `users`, `roles`, `permissions`, `role_permissions`, `staff_shifts`
 - Branch: `branches`, `halls`, `zones`, `branch_working_hours`, `tables`, `hookahs`
 - Mixology: `bowls`, `tobaccos`, `mixes`, `mix_items`
 - Inventory: `inventory_items`, `inventory_movements`
-- Order: `orders`, `order_items`
+- Order: `orders`, `order_items`, `coal_changes`
 - Booking: `bookings`
 - Payment: `payments`
 - Notification: `notifications`, `notification_templates`, `notification_preferences`
@@ -17,7 +18,9 @@ Service DbContexts map to these tables:
 - Review: `reviews`
 - Promo: `promocodes`, `promocode_redemptions`
 
-The current codebase has the EF Core persistence foundation in place for all services. Some HTTP handlers still use in-memory collections while they are being migrated endpoint-by-endpoint to the service DbContexts. Keep integration through events/HTTP contracts instead of direct cross-service queries.
+The current codebase uses EF Core handlers for domain state across all backend services. Cross-service checks still go through HTTP contracts instead of direct DbContext access.
+
+Every service DbContext also maps `integration_outbox`. Event-producing handlers add outbox messages to the same DbContext before `SaveChangesAsync`, so domain state and the pending integration event are committed atomically inside the service database operation.
 
 Database-level business guards already included in the baseline schema:
 

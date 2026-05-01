@@ -1,6 +1,18 @@
 create extension if not exists "uuid-ossp";
 create extension if not exists "btree_gist";
 
+create table if not exists integration_outbox (
+    id uuid primary key,
+    event_id uuid not null,
+    event_name varchar(160) not null,
+    routing_key varchar(160) not null,
+    payload jsonb not null,
+    occurred_at timestamp with time zone not null,
+    created_at timestamp with time zone not null default now(),
+    processed_at timestamp with time zone null,
+    error text null
+);
+
 create table if not exists roles (
     id uuid primary key,
     name varchar(120) not null,
@@ -40,6 +52,15 @@ create table if not exists users (
     status varchar(40) not null,
     created_at timestamp with time zone not null default now(),
     updated_at timestamp with time zone not null default now()
+);
+
+create table if not exists refresh_tokens (
+    id uuid primary key,
+    user_id uuid not null references users(id) on delete cascade,
+    token_hash varchar(128) not null unique,
+    created_at timestamp with time zone not null default now(),
+    expires_at timestamp with time zone not null,
+    revoked_at timestamp with time zone null
 );
 
 create table if not exists staff_shifts (
@@ -212,6 +233,12 @@ create table if not exists order_items (
     status varchar(40) not null
 );
 
+create table if not exists coal_changes (
+    id uuid primary key,
+    order_id uuid not null references orders(id) on delete cascade,
+    changed_at timestamp with time zone not null
+);
+
 create table if not exists inventory_movements (
     id uuid primary key,
     branch_id uuid not null references branches(id),
@@ -357,12 +384,15 @@ create table if not exists analytics_tobacco_usage (
 create index if not exists ix_bookings_table_time on bookings(table_id, start_time, end_time);
 create index if not exists ix_staff_shifts_staff_time on staff_shifts(staff_id, starts_at, ends_at);
 create index if not exists ix_orders_branch_status on orders(branch_id, status);
+create index if not exists ix_coal_changes_order_changed_at on coal_changes(order_id, changed_at desc);
 create index if not exists ix_inventory_items_low_stock on inventory_items(branch_id, stock_grams, min_stock_grams);
 create index if not exists ix_inventory_movements_branch_created_at on inventory_movements(branch_id, created_at);
 create index if not exists ix_notifications_user_created_at on notifications(user_id, created_at desc);
 create index if not exists ix_promocode_redemptions_code_client on promocode_redemptions(code, client_id);
 create index if not exists ix_analytics_orders_branch_created_at on analytics_orders(branch_id, created_at);
 create index if not exists ix_analytics_bookings_branch_created_at on analytics_bookings(branch_id, created_at);
+create index if not exists ix_integration_outbox_pending on integration_outbox(processed_at, created_at);
+create index if not exists ix_refresh_tokens_user_active on refresh_tokens(user_id, revoked_at, expires_at);
 
 do $$
 begin
@@ -496,8 +526,9 @@ insert into branches(id, name, address, phone, timezone) values
 on conflict (id) do nothing;
 
 insert into users(id, role_id, branch_id, name, phone, email, password_hash, status) values
-    ('90000000-0000-0000-0000-000000000001', '01000000-0000-0000-0000-000000000005', null, 'Client', '+79990000001', 'client@hookah.local', 'seed-password-hash', 'active'),
-    ('90000000-0000-0000-0000-000000000010', '01000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000001', 'Hookah Master', '+79991112233', null, 'seed-password-hash', 'active')
+    ('90000000-0000-0000-0000-000000000000', '01000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'Owner', '+79990000000', 'owner@hookah.local', 'PBKDF2-SHA256$100000$aG9va2FoLXNlZWQtc2FsdCE=$skse35EKG1yHQWKX2a/9h4UKDo6zFXk6XVJSybEXVJM=', 'active'),
+    ('90000000-0000-0000-0000-000000000001', '01000000-0000-0000-0000-000000000005', null, 'Client', '+79990000001', 'client@hookah.local', 'PBKDF2-SHA256$100000$aG9va2FoLXNlZWQtc2FsdCE=$skse35EKG1yHQWKX2a/9h4UKDo6zFXk6XVJSybEXVJM=', 'active'),
+    ('90000000-0000-0000-0000-000000000010', '01000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000001', 'Hookah Master', '+79991112233', null, 'PBKDF2-SHA256$100000$aG9va2FoLXNlZWQtc2FsdCE=$skse35EKG1yHQWKX2a/9h4UKDo6zFXk6XVJSybEXVJM=', 'active')
 on conflict (id) do nothing;
 
 insert into branch_working_hours(branch_id, day_of_week, opens_at, closes_at, is_closed)

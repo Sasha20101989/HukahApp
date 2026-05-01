@@ -179,6 +179,9 @@ services:
     command: ["HookahPlatform.AnalyticsService.dll"]
     environment:
       <<: *service-events
+      Outbox__Dispatcher__Enabled: "true"
+      Outbox__Dispatcher__BatchSize: "50"
+      Outbox__Dispatcher__IntervalSeconds: "10"
 
   review-service:
     build:

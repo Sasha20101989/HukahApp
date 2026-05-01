@@ -20,7 +20,7 @@ Implemented service endpoints:
 - Reviews: `/api/reviews`, `/api/reviews/mixes/{mixId}/summary`, `/api/reviews/clients/{clientId}`
 - Promo: `/api/promocodes`, `/api/promocodes/validate`, `/api/promocodes/redeem`, `/api/promocodes/{code}/deactivate`
 
-All services also expose `/health`, `/events/debug` and `/persistence/health`.
+All services also expose `/health`, `/events/debug`, `/outbox/debug`, `/outbox/dispatch` and `/persistence/health`.
 
 Gateway-only endpoints:
 

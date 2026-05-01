@@ -1,7 +1,8 @@
 using HookahPlatform.BuildingBlocks;
 using HookahPlatform.BuildingBlocks.Persistence;
-using HookahPlatform.MixologyService.Persistence;
 using HookahPlatform.Contracts;
+using HookahPlatform.MixologyService.Persistence;
+using Microsoft.EntityFrameworkCore;
 using System.Net.Http.Json;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -13,265 +14,202 @@ var app = builder.Build();
 app.UseHookahServiceDefaults();
 app.MapPersistenceHealth<MixologyDbContext>("mixology-service");
 
-var bowls = new Dictionary<Guid, Bowl>();
-var tobaccos = new Dictionary<Guid, Tobacco>();
-var mixes = new Dictionary<Guid, Mix>();
-SeedMixology(bowls, tobaccos, mixes);
+app.MapGet("/api/bowls", async (MixologyDbContext db, CancellationToken cancellationToken) =>
+    Results.Ok(await db.Bowls.AsNoTracking().Where(bowl => bowl.IsActive).OrderBy(bowl => bowl.Name).ToListAsync(cancellationToken)));
 
-app.MapGet("/api/bowls", () => Results.Ok(bowls.Values.Where(bowl => bowl.IsActive).OrderBy(bowl => bowl.Name)));
-
-app.MapPost("/api/bowls", (CreateBowlRequest request) =>
+app.MapPost("/api/bowls", async (CreateBowlRequest request, MixologyDbContext db, CancellationToken cancellationToken) =>
 {
-    var bowl = new Bowl(Guid.NewGuid(), request.Name, request.Type, request.CapacityGrams, request.RecommendedStrength, request.AverageSmokeMinutes, true);
-    bowls[bowl.Id] = bowl;
+    var bowl = new BowlEntity { Id = Guid.NewGuid(), Name = request.Name, Type = request.Type, CapacityGrams = request.CapacityGrams, RecommendedStrength = request.RecommendedStrength, AverageSmokeMinutes = request.AverageSmokeMinutes, IsActive = true };
+    db.Bowls.Add(bowl);
+    await db.SaveChangesAsync(cancellationToken);
     return Results.Created($"/api/bowls/{bowl.Id}", bowl);
 });
 
-app.MapPatch("/api/bowls/{id:guid}", (Guid id, UpdateBowlRequest request) =>
+app.MapPatch("/api/bowls/{id:guid}", async (Guid id, UpdateBowlRequest request, MixologyDbContext db, CancellationToken cancellationToken) =>
 {
-    if (!bowls.TryGetValue(id, out var bowl))
-    {
-        return HttpResults.NotFound("Bowl", id);
-    }
-
-    var updated = bowl with
-    {
-        Name = request.Name ?? bowl.Name,
-        Type = request.Type ?? bowl.Type,
-        CapacityGrams = request.CapacityGrams ?? bowl.CapacityGrams,
-        RecommendedStrength = request.RecommendedStrength ?? bowl.RecommendedStrength,
-        AverageSmokeMinutes = request.AverageSmokeMinutes ?? bowl.AverageSmokeMinutes,
-        IsActive = request.IsActive ?? bowl.IsActive
-    };
-
-    bowls[id] = updated;
-    return Results.Ok(updated);
+    var bowl = await db.Bowls.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    if (bowl is null) return HttpResults.NotFound("Bowl", id);
+    bowl.Name = request.Name ?? bowl.Name;
+    bowl.Type = request.Type ?? bowl.Type;
+    bowl.CapacityGrams = request.CapacityGrams ?? bowl.CapacityGrams;
+    bowl.RecommendedStrength = request.RecommendedStrength ?? bowl.RecommendedStrength;
+    bowl.AverageSmokeMinutes = request.AverageSmokeMinutes ?? bowl.AverageSmokeMinutes;
+    bowl.IsActive = request.IsActive ?? bowl.IsActive;
+    await db.SaveChangesAsync(cancellationToken);
+    return Results.Ok(bowl);
 });
 
-app.MapDelete("/api/bowls/{id:guid}", (Guid id) =>
+app.MapDelete("/api/bowls/{id:guid}", async (Guid id, MixologyDbContext db, CancellationToken cancellationToken) =>
 {
-    if (!bowls.TryGetValue(id, out var bowl))
-    {
-        return HttpResults.NotFound("Bowl", id);
-    }
-
-    bowls[id] = bowl with { IsActive = false };
+    var bowl = await db.Bowls.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    if (bowl is null) return HttpResults.NotFound("Bowl", id);
+    bowl.IsActive = false;
+    await db.SaveChangesAsync(cancellationToken);
     return Results.NoContent();
 });
 
-app.MapGet("/api/tobaccos", (string? brand, string? strength, string? category, bool? isActive) =>
+app.MapGet("/api/tobaccos", async (string? brand, string? strength, string? category, bool? isActive, MixologyDbContext db, CancellationToken cancellationToken) =>
 {
-    var query = tobaccos.Values.AsEnumerable();
-    if (!string.IsNullOrWhiteSpace(brand))
-    {
-        query = query.Where(tobacco => string.Equals(tobacco.Brand, brand, StringComparison.OrdinalIgnoreCase));
-    }
-    if (!string.IsNullOrWhiteSpace(strength))
-    {
-        query = query.Where(tobacco => string.Equals(tobacco.Strength, strength, StringComparison.OrdinalIgnoreCase));
-    }
-    if (!string.IsNullOrWhiteSpace(category))
-    {
-        query = query.Where(tobacco => string.Equals(tobacco.Category, category, StringComparison.OrdinalIgnoreCase));
-    }
-    if (isActive is not null)
-    {
-        query = query.Where(tobacco => tobacco.IsActive == isActive);
-    }
-
-    return Results.Ok(query.OrderBy(tobacco => tobacco.Brand).ThenBy(tobacco => tobacco.Flavor));
+    var query = db.Tobaccos.AsNoTracking();
+    if (!string.IsNullOrWhiteSpace(brand)) query = query.Where(tobacco => tobacco.Brand == brand);
+    if (!string.IsNullOrWhiteSpace(strength)) query = query.Where(tobacco => tobacco.Strength == strength);
+    if (!string.IsNullOrWhiteSpace(category)) query = query.Where(tobacco => tobacco.Category == category);
+    if (isActive is not null) query = query.Where(tobacco => tobacco.IsActive == isActive);
+    return Results.Ok(await query.OrderBy(tobacco => tobacco.Brand).ThenBy(tobacco => tobacco.Flavor).ToListAsync(cancellationToken));
 });
 
-app.MapPost("/api/tobaccos", (CreateTobaccoRequest request) =>
+app.MapPost("/api/tobaccos", async (CreateTobaccoRequest request, MixologyDbContext db, CancellationToken cancellationToken) =>
 {
-    var tobacco = new Tobacco(Guid.NewGuid(), request.Brand, request.Line, request.Flavor, request.Strength, request.Category, request.Description, request.CostPerGram, true, request.PhotoUrl);
-    tobaccos[tobacco.Id] = tobacco;
+    var tobacco = new TobaccoEntity { Id = Guid.NewGuid(), Brand = request.Brand, Line = request.Line, Flavor = request.Flavor, Strength = request.Strength, Category = request.Category, Description = request.Description, CostPerGram = request.CostPerGram, IsActive = true, PhotoUrl = request.PhotoUrl };
+    db.Tobaccos.Add(tobacco);
+    await db.SaveChangesAsync(cancellationToken);
     return Results.Created($"/api/tobaccos/{tobacco.Id}", tobacco);
 });
 
-app.MapPatch("/api/tobaccos/{id:guid}", (Guid id, UpdateTobaccoRequest request) =>
+app.MapPatch("/api/tobaccos/{id:guid}", async (Guid id, UpdateTobaccoRequest request, MixologyDbContext db, CancellationToken cancellationToken) =>
 {
-    if (!tobaccos.TryGetValue(id, out var tobacco))
-    {
-        return HttpResults.NotFound("Tobacco", id);
-    }
-
-    var updated = tobacco with
-    {
-        Brand = request.Brand ?? tobacco.Brand,
-        Line = request.Line ?? tobacco.Line,
-        Flavor = request.Flavor ?? tobacco.Flavor,
-        Strength = request.Strength ?? tobacco.Strength,
-        Category = request.Category ?? tobacco.Category,
-        Description = request.Description ?? tobacco.Description,
-        CostPerGram = request.CostPerGram ?? tobacco.CostPerGram,
-        IsActive = request.IsActive ?? tobacco.IsActive,
-        PhotoUrl = request.PhotoUrl ?? tobacco.PhotoUrl
-    };
-
-    tobaccos[id] = updated;
-    return Results.Ok(updated);
+    var tobacco = await db.Tobaccos.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    if (tobacco is null) return HttpResults.NotFound("Tobacco", id);
+    tobacco.Brand = request.Brand ?? tobacco.Brand;
+    tobacco.Line = request.Line ?? tobacco.Line;
+    tobacco.Flavor = request.Flavor ?? tobacco.Flavor;
+    tobacco.Strength = request.Strength ?? tobacco.Strength;
+    tobacco.Category = request.Category ?? tobacco.Category;
+    tobacco.Description = request.Description ?? tobacco.Description;
+    tobacco.CostPerGram = request.CostPerGram ?? tobacco.CostPerGram;
+    tobacco.IsActive = request.IsActive ?? tobacco.IsActive;
+    tobacco.PhotoUrl = request.PhotoUrl ?? tobacco.PhotoUrl;
+    await db.SaveChangesAsync(cancellationToken);
+    return Results.Ok(tobacco);
 });
 
-app.MapDelete("/api/tobaccos/{id:guid}", (Guid id) =>
+app.MapDelete("/api/tobaccos/{id:guid}", async (Guid id, MixologyDbContext db, CancellationToken cancellationToken) =>
 {
-    if (!tobaccos.TryGetValue(id, out var tobacco))
-    {
-        return HttpResults.NotFound("Tobacco", id);
-    }
-
-    tobaccos[id] = tobacco with { IsActive = false };
+    var tobacco = await db.Tobaccos.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    if (tobacco is null) return HttpResults.NotFound("Tobacco", id);
+    tobacco.IsActive = false;
+    await db.SaveChangesAsync(cancellationToken);
     return Results.NoContent();
 });
 
-app.MapGet("/api/mixes", async (string? strength, string? tasteProfile, Guid? bowlId, bool? availableOnly, Guid? branchId, bool? publicOnly, IHttpClientFactory httpClientFactory, IConfiguration configuration, CancellationToken cancellationToken) =>
+app.MapGet("/api/mixes", async (string? strength, string? tasteProfile, Guid? bowlId, bool? availableOnly, Guid? branchId, bool? publicOnly, MixologyDbContext db, IHttpClientFactory httpClientFactory, IConfiguration configuration, CancellationToken cancellationToken) =>
 {
-    var query = mixes.Values.AsEnumerable();
-    if (!string.IsNullOrWhiteSpace(strength))
-    {
-        query = query.Where(mix => string.Equals(mix.Strength, strength, StringComparison.OrdinalIgnoreCase));
-    }
-    if (!string.IsNullOrWhiteSpace(tasteProfile))
-    {
-        query = query.Where(mix => string.Equals(mix.TasteProfile, tasteProfile, StringComparison.OrdinalIgnoreCase));
-    }
-    if (bowlId is not null)
-    {
-        query = query.Where(mix => mix.BowlId == bowlId);
-    }
-    if (publicOnly == true)
-    {
-        query = query.Where(mix => mix.IsPublic);
-    }
+    var query = db.Mixes.AsNoTracking().Where(mix => mix.IsActive);
+    if (!string.IsNullOrWhiteSpace(strength)) query = query.Where(mix => mix.Strength == strength);
+    if (!string.IsNullOrWhiteSpace(tasteProfile)) query = query.Where(mix => mix.TasteProfile == tasteProfile);
+    if (bowlId is not null) query = query.Where(mix => mix.BowlId == bowlId);
+    if (publicOnly == true) query = query.Where(mix => mix.IsPublic);
+
+    var mixes = await LoadMixDtosAsync(query.OrderBy(mix => mix.Name), db, cancellationToken);
     if (availableOnly == true)
     {
-        query = query.Where(mix => mix.IsActive && mix.Items.All(item => tobaccos.TryGetValue(item.TobaccoId, out var tobacco) && tobacco.IsActive));
-
+        var activeTobaccos = await db.Tobaccos.AsNoTracking().Where(tobacco => tobacco.IsActive).Select(tobacco => tobacco.Id).ToListAsync(cancellationToken);
+        mixes = mixes.Where(mix => mix.Items.All(item => activeTobaccos.Contains(item.TobaccoId))).ToList();
         if (branchId is not null)
         {
-            query = await FilterAvailableMixesAsync(branchId.Value, query.ToArray(), httpClientFactory, configuration, cancellationToken);
+            mixes = (await FilterAvailableMixesAsync(branchId.Value, mixes, httpClientFactory, configuration, cancellationToken)).ToList();
         }
     }
 
-    var ordered = query.OrderBy(mix => mix.Name).ToArray();
-    return publicOnly == true
-        ? (IResult)Results.Ok(ordered.Select(ToPublicMix))
-        : Results.Ok(ordered);
+    return publicOnly == true ? Results.Ok(mixes.Select(ToPublicMix)) : Results.Ok(mixes);
 });
 
-app.MapGet("/api/mixes/{id:guid}", (Guid id) =>
-    mixes.TryGetValue(id, out var mix) ? Results.Ok(mix) : HttpResults.NotFound("Mix", id));
-
-app.MapPost("/api/mixes/calculate", (CalculateMixRequest request) =>
+app.MapGet("/api/mixes/{id:guid}", async (Guid id, MixologyDbContext db, CancellationToken cancellationToken) =>
 {
-    var result = CalculateMix(request.BowlId, request.Items, bowls, tobaccos);
+    var mix = await db.Mixes.AsNoTracking().FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    if (mix is null) return HttpResults.NotFound("Mix", id);
+    var items = await db.MixItems.AsNoTracking().Where(item => item.MixId == id).OrderBy(item => item.Id).ToListAsync(cancellationToken);
+    return Results.Ok(ToMixDto(mix, items));
+});
+
+app.MapPost("/api/mixes/calculate", async (CalculateMixRequest request, MixologyDbContext db, CancellationToken cancellationToken) =>
+{
+    var result = await CalculateMixAsync(request.BowlId, request.Items, db, cancellationToken);
     return result.Error is not null ? HttpResults.Validation(result.Error) : Results.Ok(result.Value);
 });
 
-app.MapPost("/api/mixes", async (CreateMixRequest request, IEventPublisher events) =>
+app.MapPost("/api/mixes", async (CreateMixRequest request, MixologyDbContext db, IEventPublisher events, CancellationToken cancellationToken) =>
 {
-    var result = CalculateMix(request.BowlId, request.Items, bowls, tobaccos);
-    if (result.Error is not null || result.Value is null)
-    {
-        return HttpResults.Validation(result.Error ?? "Mix calculation failed.");
-    }
+    var result = await CalculateMixAsync(request.BowlId, request.Items, db, cancellationToken);
+    if (result.Error is not null || result.Value is null) return HttpResults.Validation(result.Error ?? "Mix calculation failed.");
 
     var price = request.Price ?? Math.Ceiling(result.Value.Cost * 3.2m / 10m) * 10m;
-    var mix = new Mix(
-        Guid.NewGuid(),
-        request.Name,
-        request.Description,
-        request.BowlId,
-        request.Strength,
-        request.TasteProfile,
-        result.Value.TotalGrams,
-        price,
-        result.Value.Cost,
-        price - result.Value.Cost,
-        request.IsPublic,
-        true,
-        request.CreatedBy,
-        DateTimeOffset.UtcNow,
-        result.Value.Items.Select(item => new MixItem(Guid.NewGuid(), item.TobaccoId, item.Percent, item.Grams)).ToArray());
+    var mix = new MixEntity { Id = Guid.NewGuid(), Name = request.Name, Description = request.Description, BowlId = request.BowlId, Strength = request.Strength, TasteProfile = request.TasteProfile, TotalGrams = result.Value.TotalGrams, Price = price, Cost = result.Value.Cost, Margin = price - result.Value.Cost, IsPublic = request.IsPublic, IsActive = true, CreatedBy = request.CreatedBy, CreatedAt = DateTimeOffset.UtcNow };
+    db.Mixes.Add(mix);
+    foreach (var item in result.Value.Items)
+    {
+        db.MixItems.Add(new MixItemEntity { Id = Guid.NewGuid(), MixId = mix.Id, TobaccoId = item.TobaccoId, Percent = item.Percent, Grams = item.Grams });
+    }
+    var created = new MixCreated(mix.Id, mix.Name, mix.BowlId, DateTimeOffset.UtcNow);
+    var outboxMessage = db.AddOutboxMessage(created);
+    await db.SaveChangesAsync(cancellationToken);
+    await db.ForwardAndMarkOutboxAsync(events, created, outboxMessage, cancellationToken);
 
-    mixes[mix.Id] = mix;
-    await events.PublishAsync(new MixCreated(mix.Id, mix.Name, mix.BowlId, DateTimeOffset.UtcNow));
-
-    return Results.Created($"/api/mixes/{mix.Id}", mix);
+    var items = await db.MixItems.AsNoTracking().Where(item => item.MixId == mix.Id).ToListAsync(cancellationToken);
+    return Results.Created($"/api/mixes/{mix.Id}", ToMixDto(mix, items));
 });
 
-app.MapPost("/api/mixes/recommend", (RecommendMixRequest request) =>
+app.MapPost("/api/mixes/recommend", async (RecommendMixRequest request, MixologyDbContext db, CancellationToken cancellationToken) =>
 {
-    var query = mixes.Values.Where(mix => mix.IsActive);
-    query = query.Where(mix => string.Equals(mix.Strength, request.Strength, StringComparison.OrdinalIgnoreCase));
-    query = query.Where(mix => string.Equals(mix.TasteProfile, request.TasteProfile, StringComparison.OrdinalIgnoreCase));
-    query = query.Where(mix => mix.BowlId == request.BowlId);
-
-    if (request.AvailableOnly)
-    {
-        query = query.Where(mix => mix.Items.All(item => tobaccos.TryGetValue(item.TobaccoId, out var tobacco) && tobacco.IsActive));
-    }
-
-    return Results.Ok(query.OrderByDescending(mix => mix.Margin).Take(10));
+    var query = db.Mixes.AsNoTracking().Where(mix => mix.IsActive && mix.Strength == request.Strength && mix.TasteProfile == request.TasteProfile && mix.BowlId == request.BowlId).OrderByDescending(mix => mix.Margin).Take(10);
+    var mixes = await LoadMixDtosAsync(query, db, cancellationToken);
+    return Results.Ok(mixes);
 });
 
-app.MapPatch("/api/mixes/{id:guid}", (Guid id, UpdateMixRequest request) =>
+app.MapPatch("/api/mixes/{id:guid}", async (Guid id, UpdateMixRequest request, MixologyDbContext db, CancellationToken cancellationToken) =>
 {
-    if (!mixes.TryGetValue(id, out var mix))
+    var mix = await db.Mixes.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    if (mix is null) return HttpResults.NotFound("Mix", id);
+    mix.Name = request.Name ?? mix.Name;
+    mix.Description = request.Description ?? mix.Description;
+    mix.Strength = request.Strength ?? mix.Strength;
+    mix.TasteProfile = request.TasteProfile ?? mix.TasteProfile;
+    if (request.Price is not null)
     {
-        return HttpResults.NotFound("Mix", id);
+        mix.Price = request.Price.Value;
+        mix.Margin = request.Price.Value - mix.Cost;
     }
-
-    var updated = mix with
-    {
-        Name = request.Name ?? mix.Name,
-        Description = request.Description ?? mix.Description,
-        Strength = request.Strength ?? mix.Strength,
-        TasteProfile = request.TasteProfile ?? mix.TasteProfile,
-        Price = request.Price ?? mix.Price,
-        Margin = request.Price is null ? mix.Margin : request.Price.Value - mix.Cost
-    };
-    mixes[id] = updated;
-    return Results.Ok(updated);
+    await db.SaveChangesAsync(cancellationToken);
+    var items = await db.MixItems.AsNoTracking().Where(item => item.MixId == mix.Id).ToListAsync(cancellationToken);
+    return Results.Ok(ToMixDto(mix, items));
 });
 
-app.MapPatch("/api/mixes/{id:guid}/visibility", (Guid id, UpdateMixVisibilityRequest request) =>
+app.MapPatch("/api/mixes/{id:guid}/visibility", async (Guid id, UpdateMixVisibilityRequest request, MixologyDbContext db, CancellationToken cancellationToken) =>
 {
-    if (!mixes.TryGetValue(id, out var mix))
-    {
-        return HttpResults.NotFound("Mix", id);
-    }
-
-    mixes[id] = mix with { IsPublic = request.IsPublic };
-    return Results.Ok(mixes[id]);
+    var mix = await db.Mixes.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    if (mix is null) return HttpResults.NotFound("Mix", id);
+    mix.IsPublic = request.IsPublic;
+    await db.SaveChangesAsync(cancellationToken);
+    return Results.Ok(mix);
 });
 
-app.MapDelete("/api/mixes/{id:guid}", (Guid id) =>
+app.MapDelete("/api/mixes/{id:guid}", async (Guid id, MixologyDbContext db, CancellationToken cancellationToken) =>
 {
-    if (!mixes.TryGetValue(id, out var mix))
-    {
-        return HttpResults.NotFound("Mix", id);
-    }
-
-    mixes[id] = mix with { IsActive = false };
+    var mix = await db.Mixes.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    if (mix is null) return HttpResults.NotFound("Mix", id);
+    mix.IsActive = false;
+    await db.SaveChangesAsync(cancellationToken);
     return Results.NoContent();
 });
 
 app.Run();
 
+static async Task<List<Mix>> LoadMixDtosAsync(IQueryable<MixEntity> query, MixologyDbContext db, CancellationToken cancellationToken)
+{
+    var mixEntities = await query.ToListAsync(cancellationToken);
+    var mixIds = mixEntities.Select(mix => mix.Id).ToArray();
+    var itemGroups = await db.MixItems.AsNoTracking().Where(item => mixIds.Contains(item.MixId)).GroupBy(item => item.MixId).ToDictionaryAsync(group => group.Key, group => group.ToList(), cancellationToken);
+    return mixEntities.Select(mix => ToMixDto(mix, itemGroups.TryGetValue(mix.Id, out var items) ? items : [])).ToList();
+}
+
+static Mix ToMixDto(MixEntity mix, IReadOnlyCollection<MixItemEntity> items)
+{
+    return new Mix(mix.Id, mix.Name, mix.Description, mix.BowlId, mix.Strength, mix.TasteProfile, mix.TotalGrams, mix.Price, mix.Cost, mix.Margin, mix.IsPublic, mix.IsActive, mix.CreatedBy, mix.CreatedAt, items.Select(item => new MixItem(item.Id, item.TobaccoId, item.Percent, item.Grams)).ToArray());
+}
+
 static PublicMix ToPublicMix(Mix mix)
 {
-    return new PublicMix(
-        mix.Id,
-        mix.Name,
-        mix.Description,
-        mix.BowlId,
-        mix.Strength,
-        mix.TasteProfile,
-        mix.TotalGrams,
-        mix.Price,
-        mix.IsPublic,
-        mix.Items);
+    return new PublicMix(mix.Id, mix.Name, mix.Description, mix.BowlId, mix.Strength, mix.TasteProfile, mix.TotalGrams, mix.Price, mix.IsPublic, mix.Items);
 }
 
 static async Task<IEnumerable<Mix>> FilterAvailableMixesAsync(Guid branchId, IReadOnlyCollection<Mix> mixes, IHttpClientFactory httpClientFactory, IConfiguration configuration, CancellationToken cancellationToken)
@@ -282,49 +220,30 @@ static async Task<IEnumerable<Mix>> FilterAvailableMixesAsync(Guid branchId, IRe
 
     foreach (var mix in mixes)
     {
-        var response = await client.PostAsJsonAsync(
-            $"{inventoryBaseUrl}/api/inventory/check",
-            new InventoryAvailabilityRequest(branchId, mix.Items.Select(item => new InventoryAvailabilityRequestItem(item.TobaccoId, item.Grams)).ToArray()),
-            cancellationToken);
-
+        var response = await client.PostAsJsonAsync($"{inventoryBaseUrl}/api/inventory/check", new InventoryAvailabilityRequest(branchId, mix.Items.Select(item => new InventoryAvailabilityRequestItem(item.TobaccoId, item.Grams)).ToArray()), cancellationToken);
         response.EnsureSuccessStatusCode();
         var availability = await response.Content.ReadFromJsonAsync<InventoryAvailabilityResponse>(cancellationToken);
-        if (availability?.IsAvailable == true)
-        {
-            available.Add(mix);
-        }
+        if (availability?.IsAvailable == true) available.Add(mix);
     }
 
     return available;
 }
 
-static CalculationResult CalculateMix(Guid bowlId, IReadOnlyCollection<MixInputItem> items, IReadOnlyDictionary<Guid, Bowl> bowls, IReadOnlyDictionary<Guid, Tobacco> tobaccos)
+static async Task<CalculationResult> CalculateMixAsync(Guid bowlId, IReadOnlyCollection<MixInputItem> items, MixologyDbContext db, CancellationToken cancellationToken)
 {
-    if (!bowls.TryGetValue(bowlId, out var bowl) || !bowl.IsActive)
-    {
-        return new("Bowl must exist and be active.", null);
-    }
+    var bowl = await db.Bowls.AsNoTracking().FirstOrDefaultAsync(candidate => candidate.Id == bowlId, cancellationToken);
+    if (bowl is null || !bowl.IsActive) return new("Bowl must exist and be active.", null);
+    if (items.Count == 0) return new("Mix must contain at least one tobacco.", null);
+    if (!DomainRules.PercentSumIsValid(items.Select(item => item.Percent))) return new("Mix item percent sum must be exactly 100.", null);
 
-    if (items.Count == 0)
-    {
-        return new("Mix must contain at least one tobacco.", null);
-    }
-
-    if (!DomainRules.PercentSumIsValid(items.Select(item => item.Percent)))
-    {
-        return new("Mix item percent sum must be exactly 100.", null);
-    }
-
+    var tobaccoIds = items.Select(item => item.TobaccoId).ToArray();
+    var tobaccos = await db.Tobaccos.AsNoTracking().Where(tobacco => tobaccoIds.Contains(tobacco.Id)).ToDictionaryAsync(tobacco => tobacco.Id, cancellationToken);
     var calculatedItems = new List<CalculatedMixItem>();
     decimal cost = 0;
 
     foreach (var item in items)
     {
-        if (!tobaccos.TryGetValue(item.TobaccoId, out var tobacco) || !tobacco.IsActive)
-        {
-            return new($"Tobacco '{item.TobaccoId}' must exist and be active.", null);
-        }
-
+        if (!tobaccos.TryGetValue(item.TobaccoId, out var tobacco) || !tobacco.IsActive) return new($"Tobacco '{item.TobaccoId}' must exist and be active.", null);
         var grams = DomainRules.CalculateGrams(bowl.CapacityGrams, item.Percent);
         cost += grams * tobacco.CostPerGram;
         calculatedItems.Add(new CalculatedMixItem(item.TobaccoId, item.Percent, grams));
@@ -333,33 +252,6 @@ static CalculationResult CalculateMix(Guid bowlId, IReadOnlyCollection<MixInputI
     return new(null, new CalculatedMix(bowl.CapacityGrams, Math.Round(cost, 2), calculatedItems));
 }
 
-static void SeedMixology(IDictionary<Guid, Bowl> bowls, IDictionary<Guid, Tobacco> tobaccos, IDictionary<Guid, Mix> mixes)
-{
-    var bowlId = Guid.Parse("50000000-0000-0000-0000-000000000001");
-    var strawberryId = Guid.Parse("60000000-0000-0000-0000-000000000001");
-    var mintId = Guid.Parse("60000000-0000-0000-0000-000000000002");
-    var blueberryId = Guid.Parse("60000000-0000-0000-0000-000000000003");
-
-    bowls[bowlId] = new Bowl(bowlId, "Oblako Phunnel M", "PHUNNEL", 18, "MEDIUM", 70, true);
-    tobaccos[strawberryId] = new Tobacco(strawberryId, "Darkside", "Base", "Strawberry", "STRONG", "BERRY", "Strawberry flavor", 8.5m, true, null);
-    tobaccos[mintId] = new Tobacco(mintId, "Musthave", "Classic", "Mint", "MEDIUM", "FRESH", "Cooling mint", 6.8m, true, null);
-    tobaccos[blueberryId] = new Tobacco(blueberryId, "Element", "Air", "Blueberry", "LIGHT", "BERRY", "Blueberry flavor", 7.2m, true, null);
-
-    var items = new[]
-    {
-        new MixItem(Guid.NewGuid(), strawberryId, 40, 7.2m),
-        new MixItem(Guid.NewGuid(), mintId, 30, 5.4m),
-        new MixItem(Guid.NewGuid(), blueberryId, 30, 5.4m)
-    };
-
-    var cost = Math.Round(items[0].Grams * 8.5m + items[1].Grams * 6.8m + items[2].Grams * 7.2m, 2);
-    var price = 850m;
-    var mixId = Guid.Parse("70000000-0000-0000-0000-000000000001");
-    mixes[mixId] = new Mix(mixId, "Berry Ice", "Berry and fresh medium mix", bowlId, "MEDIUM", "BERRY_FRESH", 18, price, cost, price - cost, true, true, null, DateTimeOffset.UtcNow, items);
-}
-
-public sealed record Bowl(Guid Id, string Name, string Type, decimal CapacityGrams, string RecommendedStrength, int AverageSmokeMinutes, bool IsActive);
-public sealed record Tobacco(Guid Id, string Brand, string Line, string Flavor, string Strength, string Category, string? Description, decimal CostPerGram, bool IsActive, string? PhotoUrl);
 public sealed record Mix(Guid Id, string Name, string? Description, Guid BowlId, string Strength, string TasteProfile, decimal TotalGrams, decimal Price, decimal Cost, decimal Margin, bool IsPublic, bool IsActive, Guid? CreatedBy, DateTimeOffset CreatedAt, IReadOnlyCollection<MixItem> Items);
 public sealed record MixItem(Guid Id, Guid TobaccoId, decimal Percent, decimal Grams);
 public sealed record PublicMix(Guid Id, string Name, string? Description, Guid BowlId, string Strength, string TasteProfile, decimal TotalGrams, decimal Price, bool IsPublic, IReadOnlyCollection<MixItem> Items);

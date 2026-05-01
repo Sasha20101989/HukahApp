@@ -1,3 +1,4 @@
+using HookahPlatform.BuildingBlocks.Persistence;
 using Microsoft.EntityFrameworkCore;
 
 namespace HookahPlatform.AuthService.Persistence;
@@ -6,9 +7,11 @@ public sealed class AuthDbContext(DbContextOptions<AuthDbContext> options) : DbC
 {
     public DbSet<AuthUserEntity> Users => Set<AuthUserEntity>();
     public DbSet<AuthRoleEntity> Roles => Set<AuthRoleEntity>();
+    public DbSet<AuthRefreshTokenEntity> RefreshTokens => Set<AuthRefreshTokenEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        modelBuilder.ConfigureIntegrationOutbox();
         modelBuilder.Entity<AuthUserEntity>(entity =>
         {
             entity.ToTable("users");
@@ -23,6 +26,16 @@ public sealed class AuthDbContext(DbContextOptions<AuthDbContext> options) : DbC
         {
             entity.ToTable("roles");
             entity.HasKey(role => role.Id);
+        });
+        modelBuilder.Entity<AuthRefreshTokenEntity>(entity =>
+        {
+            entity.ToTable("refresh_tokens");
+            entity.HasKey(token => token.Id);
+            entity.Property(token => token.UserId).HasColumnName("user_id");
+            entity.Property(token => token.TokenHash).HasColumnName("token_hash");
+            entity.Property(token => token.CreatedAt).HasColumnName("created_at");
+            entity.Property(token => token.ExpiresAt).HasColumnName("expires_at");
+            entity.Property(token => token.RevokedAt).HasColumnName("revoked_at");
         });
     }
 }
@@ -46,4 +59,14 @@ public sealed class AuthRoleEntity
     public Guid Id { get; set; }
     public string Name { get; set; } = string.Empty;
     public string Code { get; set; } = string.Empty;
+}
+
+public sealed class AuthRefreshTokenEntity
+{
+    public Guid Id { get; set; }
+    public Guid UserId { get; set; }
+    public string TokenHash { get; set; } = string.Empty;
+    public DateTimeOffset CreatedAt { get; set; }
+    public DateTimeOffset ExpiresAt { get; set; }
+    public DateTimeOffset? RevokedAt { get; set; }
 }

@@ -3,7 +3,10 @@ using HookahPlatform.BuildingBlocks.Persistence;
 using HookahPlatform.AuthService.Persistence;
 using HookahPlatform.BuildingBlocks.Security;
 using HookahPlatform.Contracts;
+using Microsoft.EntityFrameworkCore;
 using System.Net.Http.Json;
+using System.Security.Cryptography;
+using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.AddHookahServiceDefaults("auth-service");
@@ -14,76 +17,103 @@ var app = builder.Build();
 app.UseHookahServiceDefaults();
 app.MapPersistenceHealth<AuthDbContext>("auth-service");
 
-var roles = RolePermissionCatalog.Roles.ToDictionary(
-    role => role.Code,
-    role => new Role(Guid.NewGuid(), role.Name, role.Code, role.Permissions.ToArray()),
-    StringComparer.OrdinalIgnoreCase);
-
-var users = new Dictionary<Guid, AuthUser>();
-var refreshTokens = new Dictionary<string, Guid>();
-SeedAuthUsers(users, roles);
-
-app.MapPost("/api/auth/register", async (RegisterRequest request, IEventPublisher events, JwtTokenService tokens, IHttpClientFactory httpClientFactory, IConfiguration configuration, CancellationToken cancellationToken) =>
+app.MapPost("/api/auth/register", async (RegisterRequest request, AuthDbContext db, IEventPublisher events, JwtTokenService tokens, IHttpClientFactory httpClientFactory, IConfiguration configuration, CancellationToken cancellationToken) =>
 {
     if (string.IsNullOrWhiteSpace(request.Phone) || string.IsNullOrWhiteSpace(request.Password))
     {
         return HttpResults.Validation("Phone and password are required.");
     }
 
-    if (users.Values.Any(user => user.Phone == request.Phone))
+    if (await db.Users.AnyAsync(user => user.Phone == request.Phone, cancellationToken))
     {
         return HttpResults.Conflict("User with this phone already exists.");
     }
 
-    var role = roles[RoleCodes.Client];
-    var user = new AuthUser(Guid.NewGuid(), role.Id, request.Name, request.Phone, request.Email, PasswordHasher.Hash(request.Password), "ACTIVE", DateTimeOffset.UtcNow);
-    users[user.Id] = user;
-
+    var role = await db.Roles.AsNoTracking().FirstAsync(candidate => candidate.Code == RoleCodes.Client, cancellationToken);
+    var user = new AuthUserEntity
+    {
+        Id = Guid.NewGuid(),
+        RoleId = role.Id,
+        BranchId = null,
+        Name = request.Name,
+        Phone = request.Phone,
+        Email = request.Email,
+        PasswordHash = PasswordHasher.Hash(request.Password),
+        Status = "active",
+        CreatedAt = DateTimeOffset.UtcNow,
+        UpdatedAt = DateTimeOffset.UtcNow
+    };
+    db.Users.Add(user);
     var issuedTokens = IssueTokens(user.Id, role.Code, tokens);
-    refreshTokens[issuedTokens.RefreshToken] = user.Id;
+    db.RefreshTokens.Add(CreateRefreshToken(user.Id, issuedTokens.RefreshToken));
+    var registered = new UserRegistered(user.Id, user.Phone, role.Code, DateTimeOffset.UtcNow);
+    var outboxMessage = db.AddOutboxMessage(registered);
+    await db.SaveChangesAsync(cancellationToken);
 
     await CreateClientProfileAsync(user, httpClientFactory, configuration, cancellationToken);
-    await events.PublishAsync(new UserRegistered(user.Id, user.Phone, role.Code, DateTimeOffset.UtcNow));
+    await db.ForwardAndMarkOutboxAsync(events, registered, outboxMessage, cancellationToken);
 
     return Results.Ok(issuedTokens);
 });
 
-app.MapPost("/api/auth/login", (LoginRequest request, JwtTokenService tokens) =>
+app.MapPost("/api/auth/login", async (LoginRequest request, AuthDbContext db, JwtTokenService tokens, CancellationToken cancellationToken) =>
 {
-    var user = users.Values.FirstOrDefault(candidate => candidate.Phone == request.Phone);
+    var user = await db.Users.AsNoTracking().FirstOrDefaultAsync(candidate => candidate.Phone == request.Phone, cancellationToken);
     if (user is null || !PasswordHasher.Verify(request.Password, user.PasswordHash))
     {
         return Results.Unauthorized();
     }
 
-    var role = roles.Values.First(role => role.Id == user.RoleId);
+    var role = await db.Roles.AsNoTracking().FirstAsync(candidate => candidate.Id == user.RoleId, cancellationToken);
     var issuedTokens = IssueTokens(user.Id, role.Code, tokens);
-    refreshTokens[issuedTokens.RefreshToken] = user.Id;
+    db.RefreshTokens.Add(CreateRefreshToken(user.Id, issuedTokens.RefreshToken));
+    await db.SaveChangesAsync(cancellationToken);
 
     return Results.Ok(issuedTokens);
 });
 
-app.MapPost("/api/auth/refresh", (RefreshRequest request, JwtTokenService tokens) =>
+app.MapPost("/api/auth/refresh", async (RefreshRequest request, AuthDbContext db, JwtTokenService tokens, CancellationToken cancellationToken) =>
 {
-    if (!refreshTokens.TryGetValue(request.RefreshToken, out var userId) || !users.TryGetValue(userId, out var user))
+    var tokenHash = HashRefreshToken(request.RefreshToken);
+    var storedToken = await db.RefreshTokens.FirstOrDefaultAsync(candidate =>
+        candidate.TokenHash == tokenHash &&
+        candidate.RevokedAt == null &&
+        candidate.ExpiresAt > DateTimeOffset.UtcNow,
+        cancellationToken);
+    if (storedToken is null)
     {
         return Results.Unauthorized();
     }
 
-    var role = roles.Values.First(role => role.Id == user.RoleId);
+    var user = await db.Users.AsNoTracking().FirstOrDefaultAsync(candidate => candidate.Id == storedToken.UserId, cancellationToken);
+    if (user is null)
+    {
+        return Results.Unauthorized();
+    }
+
+    var role = await db.Roles.AsNoTracking().FirstAsync(candidate => candidate.Id == user.RoleId, cancellationToken);
     var issuedTokens = IssueTokens(user.Id, role.Code, tokens);
-    refreshTokens[issuedTokens.RefreshToken] = user.Id;
+    storedToken.RevokedAt = DateTimeOffset.UtcNow;
+    db.RefreshTokens.Add(CreateRefreshToken(user.Id, issuedTokens.RefreshToken));
+    await db.SaveChangesAsync(cancellationToken);
 
     return Results.Ok(issuedTokens);
 });
 
-app.MapPost("/api/auth/logout", (RefreshRequest request) =>
+app.MapPost("/api/auth/logout", async (RefreshRequest request, AuthDbContext db, CancellationToken cancellationToken) =>
 {
-    refreshTokens.Remove(request.RefreshToken);
+    var tokenHash = HashRefreshToken(request.RefreshToken);
+    var storedToken = await db.RefreshTokens.FirstOrDefaultAsync(candidate => candidate.TokenHash == tokenHash && candidate.RevokedAt == null, cancellationToken);
+    if (storedToken is not null)
+    {
+        storedToken.RevokedAt = DateTimeOffset.UtcNow;
+        await db.SaveChangesAsync(cancellationToken);
+    }
+
     return Results.NoContent();
 });
 
-app.MapGet("/api/auth/roles", () => Results.Ok(roles.Values));
+app.MapGet("/api/auth/roles", () => Results.Ok(RolePermissionCatalog.Roles.Select(role => new Role(role.Name, role.Code, role.Permissions.ToArray()))));
 
 app.Run();
 
@@ -93,31 +123,27 @@ static TokenResponse IssueTokens(Guid userId, string role, JwtTokenService token
     return new TokenResponse(userId, tokens.Issue(userId, role, TimeSpan.FromMinutes(30)), refresh);
 }
 
-static void SeedAuthUsers(IDictionary<Guid, AuthUser> users, IReadOnlyDictionary<string, Role> roles)
+static AuthRefreshTokenEntity CreateRefreshToken(Guid userId, string refreshToken)
 {
-    var ownerRole = roles[RoleCodes.Owner];
-    var clientRole = roles[RoleCodes.Client];
-    users[Guid.Parse("90000000-0000-0000-0000-000000000000")] = new AuthUser(
-        Guid.Parse("90000000-0000-0000-0000-000000000000"),
-        ownerRole.Id,
-        "Owner",
-        "+79990000000",
-        "owner@hookah.local",
-        PasswordHasher.Hash("password"),
-        "ACTIVE",
-        DateTimeOffset.UtcNow);
-    users[Guid.Parse("90000000-0000-0000-0000-000000000001")] = new AuthUser(
-        Guid.Parse("90000000-0000-0000-0000-000000000001"),
-        clientRole.Id,
-        "Client",
-        "+79990000001",
-        "client@hookah.local",
-        PasswordHasher.Hash("password"),
-        "ACTIVE",
-        DateTimeOffset.UtcNow);
+    var now = DateTimeOffset.UtcNow;
+    return new AuthRefreshTokenEntity
+    {
+        Id = Guid.NewGuid(),
+        UserId = userId,
+        TokenHash = HashRefreshToken(refreshToken),
+        CreatedAt = now,
+        ExpiresAt = now.AddDays(30),
+        RevokedAt = null
+    };
 }
 
-static async Task CreateClientProfileAsync(AuthUser user, IHttpClientFactory httpClientFactory, IConfiguration configuration, CancellationToken cancellationToken)
+static string HashRefreshToken(string refreshToken)
+{
+    var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(refreshToken));
+    return Convert.ToHexString(bytes);
+}
+
+static async Task CreateClientProfileAsync(AuthUserEntity user, IHttpClientFactory httpClientFactory, IConfiguration configuration, CancellationToken cancellationToken)
 {
     var userBaseUrl = configuration["Services:user-service:BaseUrl"] ?? "http://user-service:8080";
     var client = httpClientFactory.CreateClient("user-service");
@@ -138,6 +164,5 @@ public sealed record RegisterRequest(string Name, string Phone, string? Email, s
 public sealed record LoginRequest(string Phone, string Password);
 public sealed record RefreshRequest(string RefreshToken);
 public sealed record TokenResponse(Guid UserId, string AccessToken, string RefreshToken);
-public sealed record Role(Guid Id, string Name, string Code, string[] Permissions);
-public sealed record AuthUser(Guid Id, Guid RoleId, string Name, string Phone, string? Email, string PasswordHash, string Status, DateTimeOffset CreatedAt);
+public sealed record Role(string Name, string Code, string[] Permissions);
 public sealed record CreateClientProfileRequest(Guid UserId, string Name, string Phone, string? Email);

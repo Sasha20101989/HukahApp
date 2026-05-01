@@ -1,7 +1,8 @@
+using HookahPlatform.BranchService.Persistence;
 using HookahPlatform.BuildingBlocks;
 using HookahPlatform.BuildingBlocks.Persistence;
-using HookahPlatform.BranchService.Persistence;
 using HookahPlatform.Contracts;
+using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.AddHookahServiceDefaults("branch-service");
@@ -11,226 +12,152 @@ var app = builder.Build();
 app.UseHookahServiceDefaults();
 app.MapPersistenceHealth<BranchDbContext>("branch-service");
 
-var branches = new Dictionary<Guid, Branch>();
-var halls = new Dictionary<Guid, Hall>();
-var zones = new Dictionary<Guid, Zone>();
-var tables = new Dictionary<Guid, TableSeat>();
-var hookahs = new Dictionary<Guid, Hookah>();
-var workingHours = new Dictionary<(Guid BranchId, DayOfWeek DayOfWeek), BranchWorkingHours>();
-SeedBranches(branches, halls, zones, tables, hookahs, workingHours);
+app.MapGet("/api/branches", async (BranchDbContext db, CancellationToken cancellationToken) =>
+    Results.Ok(await db.Branches.AsNoTracking().OrderBy(branch => branch.Name).ToListAsync(cancellationToken)));
 
-app.MapGet("/api/branches", () => Results.Ok(branches.Values.OrderBy(branch => branch.Name)));
-
-app.MapPost("/api/branches", (CreateBranchRequest request) =>
+app.MapPost("/api/branches", async (CreateBranchRequest request, BranchDbContext db, CancellationToken cancellationToken) =>
 {
-    var branch = new Branch(Guid.NewGuid(), request.Name, request.Address, request.Phone, request.Timezone, true, DateTimeOffset.UtcNow);
-    branches[branch.Id] = branch;
+    var branch = new BranchEntity { Id = Guid.NewGuid(), Name = request.Name, Address = request.Address, Phone = request.Phone, Timezone = request.Timezone, IsActive = true, CreatedAt = DateTimeOffset.UtcNow };
+    db.Branches.Add(branch);
+    await db.SaveChangesAsync(cancellationToken);
     return Results.Created($"/api/branches/{branch.Id}", branch);
 });
 
-app.MapGet("/api/branches/{id:guid}", (Guid id) =>
-    branches.TryGetValue(id, out var branch) ? Results.Ok(branch) : HttpResults.NotFound("Branch", id));
+app.MapGet("/api/branches/{id:guid}", async (Guid id, BranchDbContext db, CancellationToken cancellationToken) =>
+    await db.Branches.AsNoTracking().FirstOrDefaultAsync(branch => branch.Id == id, cancellationToken) is { } branch
+        ? Results.Ok(branch)
+        : HttpResults.NotFound("Branch", id));
 
-app.MapPatch("/api/branches/{id:guid}", (Guid id, UpdateBranchRequest request) =>
+app.MapPatch("/api/branches/{id:guid}", async (Guid id, UpdateBranchRequest request, BranchDbContext db, CancellationToken cancellationToken) =>
 {
-    if (!branches.TryGetValue(id, out var branch))
-    {
-        return HttpResults.NotFound("Branch", id);
-    }
-
-    var updated = branch with
-    {
-        Name = request.Name ?? branch.Name,
-        Address = request.Address ?? branch.Address,
-        Phone = request.Phone ?? branch.Phone,
-        Timezone = request.Timezone ?? branch.Timezone,
-        IsActive = request.IsActive ?? branch.IsActive
-    };
-    branches[id] = updated;
-    return Results.Ok(updated);
+    var branch = await db.Branches.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    if (branch is null) return HttpResults.NotFound("Branch", id);
+    branch.Name = request.Name ?? branch.Name;
+    branch.Address = request.Address ?? branch.Address;
+    branch.Phone = request.Phone ?? branch.Phone;
+    branch.Timezone = request.Timezone ?? branch.Timezone;
+    branch.IsActive = request.IsActive ?? branch.IsActive;
+    await db.SaveChangesAsync(cancellationToken);
+    return Results.Ok(branch);
 });
 
-app.MapGet("/api/branches/{id:guid}/working-hours", (Guid id) =>
+app.MapGet("/api/branches/{id:guid}/working-hours", async (Guid id, BranchDbContext db, CancellationToken cancellationToken) =>
 {
-    if (!branches.ContainsKey(id))
-    {
-        return HttpResults.NotFound("Branch", id);
-    }
-
-    return Results.Ok(workingHours.Values.Where(hours => hours.BranchId == id).OrderBy(hours => hours.DayOfWeek));
+    if (!await db.Branches.AnyAsync(branch => branch.Id == id, cancellationToken)) return HttpResults.NotFound("Branch", id);
+    return Results.Ok(await db.WorkingHours.AsNoTracking().Where(hours => hours.BranchId == id).OrderBy(hours => hours.DayOfWeek).ToListAsync(cancellationToken));
 });
 
-app.MapPut("/api/branches/{id:guid}/working-hours", (Guid id, IReadOnlyCollection<UpdateBranchWorkingHoursRequest> request) =>
+app.MapPut("/api/branches/{id:guid}/working-hours", async (Guid id, IReadOnlyCollection<UpdateBranchWorkingHoursRequest> request, BranchDbContext db, CancellationToken cancellationToken) =>
 {
-    if (!branches.ContainsKey(id))
-    {
-        return HttpResults.NotFound("Branch", id);
-    }
-
+    if (!await db.Branches.AnyAsync(branch => branch.Id == id, cancellationToken)) return HttpResults.NotFound("Branch", id);
+    var existing = await db.WorkingHours.Where(hours => hours.BranchId == id).ToListAsync(cancellationToken);
+    db.WorkingHours.RemoveRange(existing);
     foreach (var item in request)
     {
-        workingHours[(id, item.DayOfWeek)] = new BranchWorkingHours(id, item.DayOfWeek, item.OpensAt, item.ClosesAt, item.IsClosed);
+        db.WorkingHours.Add(new BranchWorkingHoursEntity { BranchId = id, DayOfWeek = (int)item.DayOfWeek, OpensAt = item.OpensAt, ClosesAt = item.ClosesAt, IsClosed = item.IsClosed });
     }
-
-    return Results.Ok(workingHours.Values.Where(hours => hours.BranchId == id).OrderBy(hours => hours.DayOfWeek));
+    await db.SaveChangesAsync(cancellationToken);
+    return Results.Ok(await db.WorkingHours.AsNoTracking().Where(hours => hours.BranchId == id).OrderBy(hours => hours.DayOfWeek).ToListAsync(cancellationToken));
 });
 
-app.MapGet("/api/branches/{id:guid}/halls", (Guid id) =>
-    Results.Ok(halls.Values.Where(hall => hall.BranchId == id).OrderBy(hall => hall.Name)));
+app.MapGet("/api/branches/{id:guid}/halls", async (Guid id, BranchDbContext db, CancellationToken cancellationToken) =>
+    Results.Ok(await db.Halls.AsNoTracking().Where(hall => hall.BranchId == id).OrderBy(hall => hall.Name).ToListAsync(cancellationToken)));
 
-app.MapGet("/api/branches/{id:guid}/zones", (Guid id) =>
+app.MapGet("/api/branches/{id:guid}/zones", async (Guid id, BranchDbContext db, CancellationToken cancellationToken) =>
 {
-    if (!branches.ContainsKey(id))
-    {
-        return HttpResults.NotFound("Branch", id);
-    }
-
-    return Results.Ok(zones.Values.Where(zone => zone.BranchId == id).OrderBy(zone => zone.Name));
+    if (!await db.Branches.AnyAsync(branch => branch.Id == id, cancellationToken)) return HttpResults.NotFound("Branch", id);
+    return Results.Ok(await db.Zones.AsNoTracking().Where(zone => zone.BranchId == id).OrderBy(zone => zone.Name).ToListAsync(cancellationToken));
 });
 
-app.MapGet("/api/branches/{id:guid}/floor-plan", (Guid id) =>
+app.MapGet("/api/branches/{id:guid}/floor-plan", async (Guid id, BranchDbContext db, CancellationToken cancellationToken) =>
 {
-    if (!branches.ContainsKey(id))
-    {
-        return HttpResults.NotFound("Branch", id);
-    }
-
-    var branchHalls = halls.Values.Where(hall => hall.BranchId == id).OrderBy(hall => hall.Name).ToArray();
-    var hallIds = branchHalls.Select(hall => hall.Id).ToHashSet();
-
-    return Results.Ok(new FloorPlan(
-        id,
-        branchHalls,
-        zones.Values.Where(zone => zone.BranchId == id && zone.IsActive).OrderBy(zone => zone.Name).ToArray(),
-        tables.Values.Where(table => hallIds.Contains(table.HallId) && table.IsActive).OrderBy(table => table.Name).ToArray()));
+    if (!await db.Branches.AnyAsync(branch => branch.Id == id, cancellationToken)) return HttpResults.NotFound("Branch", id);
+    var branchHalls = await db.Halls.AsNoTracking().Where(hall => hall.BranchId == id).OrderBy(hall => hall.Name).ToListAsync(cancellationToken);
+    var hallIds = branchHalls.Select(hall => hall.Id).ToArray();
+    var branchZones = await db.Zones.AsNoTracking().Where(zone => zone.BranchId == id && zone.IsActive).OrderBy(zone => zone.Name).ToListAsync(cancellationToken);
+    var branchTables = await db.Tables.AsNoTracking().Where(table => hallIds.Contains(table.HallId) && table.IsActive).OrderBy(table => table.Name).ToListAsync(cancellationToken);
+    return Results.Ok(new FloorPlan(id, branchHalls, branchZones, branchTables));
 });
 
-app.MapPost("/api/zones", (CreateZoneRequest request) =>
+app.MapPost("/api/zones", async (CreateZoneRequest request, BranchDbContext db, CancellationToken cancellationToken) =>
 {
-    if (!branches.ContainsKey(request.BranchId))
-    {
-        return HttpResults.NotFound("Branch", request.BranchId);
-    }
-
-    var zone = new Zone(Guid.NewGuid(), request.BranchId, request.Name, request.Description, request.Color, true);
-    zones[zone.Id] = zone;
+    if (!await db.Branches.AnyAsync(branch => branch.Id == request.BranchId, cancellationToken)) return HttpResults.NotFound("Branch", request.BranchId);
+    var zone = new ZoneEntity { Id = Guid.NewGuid(), BranchId = request.BranchId, Name = request.Name, Description = request.Description, Color = request.Color, IsActive = true };
+    db.Zones.Add(zone);
+    await db.SaveChangesAsync(cancellationToken);
     return Results.Created($"/api/zones/{zone.Id}", zone);
 });
 
-app.MapPost("/api/halls", (CreateHallRequest request) =>
+app.MapPost("/api/halls", async (CreateHallRequest request, BranchDbContext db, CancellationToken cancellationToken) =>
 {
-    if (!branches.ContainsKey(request.BranchId))
-    {
-        return HttpResults.NotFound("Branch", request.BranchId);
-    }
-
-    var hall = new Hall(Guid.NewGuid(), request.BranchId, request.Name, request.Description);
-    halls[hall.Id] = hall;
+    if (!await db.Branches.AnyAsync(branch => branch.Id == request.BranchId, cancellationToken)) return HttpResults.NotFound("Branch", request.BranchId);
+    var hall = new HallEntity { Id = Guid.NewGuid(), BranchId = request.BranchId, Name = request.Name, Description = request.Description };
+    db.Halls.Add(hall);
+    await db.SaveChangesAsync(cancellationToken);
     return Results.Created($"/api/halls/{hall.Id}", hall);
 });
 
-app.MapGet("/api/halls/{id:guid}/tables", (Guid id) =>
-    Results.Ok(tables.Values.Where(table => table.HallId == id).OrderBy(table => table.Name)));
+app.MapGet("/api/halls/{id:guid}/tables", async (Guid id, BranchDbContext db, CancellationToken cancellationToken) =>
+    Results.Ok(await db.Tables.AsNoTracking().Where(table => table.HallId == id).OrderBy(table => table.Name).ToListAsync(cancellationToken)));
 
-app.MapGet("/api/tables/{id:guid}", (Guid id) =>
-    tables.TryGetValue(id, out var table) ? Results.Ok(table) : HttpResults.NotFound("Table", id));
+app.MapGet("/api/tables/{id:guid}", async (Guid id, BranchDbContext db, CancellationToken cancellationToken) =>
+    await db.Tables.AsNoTracking().FirstOrDefaultAsync(table => table.Id == id, cancellationToken) is { } table
+        ? Results.Ok(table)
+        : HttpResults.NotFound("Table", id));
 
-app.MapPost("/api/tables", (CreateTableRequest request) =>
+app.MapPost("/api/tables", async (CreateTableRequest request, BranchDbContext db, CancellationToken cancellationToken) =>
 {
-    if (!halls.ContainsKey(request.HallId))
-    {
-        return HttpResults.NotFound("Hall", request.HallId);
-    }
-
-    if (request.ZoneId is not null && !zones.ContainsKey(request.ZoneId.Value))
-    {
-        return HttpResults.NotFound("Zone", request.ZoneId.Value);
-    }
-
-    var table = new TableSeat(Guid.NewGuid(), request.HallId, request.ZoneId, request.Name, request.Capacity, "FREE", request.XPosition, request.YPosition, true);
-    tables[table.Id] = table;
+    if (!await db.Halls.AnyAsync(hall => hall.Id == request.HallId, cancellationToken)) return HttpResults.NotFound("Hall", request.HallId);
+    if (request.ZoneId is not null && !await db.Zones.AnyAsync(zone => zone.Id == request.ZoneId.Value, cancellationToken)) return HttpResults.NotFound("Zone", request.ZoneId.Value);
+    var table = new TableEntity { Id = Guid.NewGuid(), HallId = request.HallId, ZoneId = request.ZoneId, Name = request.Name, Capacity = request.Capacity, Status = "FREE", XPosition = request.XPosition, YPosition = request.YPosition, IsActive = true };
+    db.Tables.Add(table);
+    await db.SaveChangesAsync(cancellationToken);
     return Results.Created($"/api/tables/{table.Id}", table);
 });
 
-app.MapPatch("/api/tables/{id:guid}/status", (Guid id, UpdateTableStatusRequest request) =>
+app.MapPatch("/api/tables/{id:guid}/status", async (Guid id, UpdateTableStatusRequest request, BranchDbContext db, CancellationToken cancellationToken) =>
 {
-    if (!tables.TryGetValue(id, out var table))
-    {
-        return HttpResults.NotFound("Table", id);
-    }
-
-    tables[id] = table with { Status = request.Status };
-    return Results.Ok(tables[id]);
+    var table = await db.Tables.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    if (table is null) return HttpResults.NotFound("Table", id);
+    table.Status = request.Status;
+    await db.SaveChangesAsync(cancellationToken);
+    return Results.Ok(table);
 });
 
-app.MapGet("/api/hookahs", (Guid? branchId, string? status) =>
+app.MapGet("/api/hookahs", async (Guid? branchId, string? status, BranchDbContext db, CancellationToken cancellationToken) =>
 {
-    var query = hookahs.Values.AsEnumerable();
-    if (branchId is not null)
-    {
-        query = query.Where(hookah => hookah.BranchId == branchId);
-    }
-    if (!string.IsNullOrWhiteSpace(status))
-    {
-        query = query.Where(hookah => string.Equals(hookah.Status, status, StringComparison.OrdinalIgnoreCase));
-    }
-
-    return Results.Ok(query.OrderBy(hookah => hookah.Name));
+    var query = db.Hookahs.AsNoTracking();
+    if (branchId is not null) query = query.Where(hookah => hookah.BranchId == branchId);
+    if (!string.IsNullOrWhiteSpace(status)) query = query.Where(hookah => hookah.Status == status);
+    return Results.Ok(await query.OrderBy(hookah => hookah.Name).ToListAsync(cancellationToken));
 });
 
-app.MapGet("/api/hookahs/{id:guid}", (Guid id) =>
-    hookahs.TryGetValue(id, out var hookah) ? Results.Ok(hookah) : HttpResults.NotFound("Hookah", id));
+app.MapGet("/api/hookahs/{id:guid}", async (Guid id, BranchDbContext db, CancellationToken cancellationToken) =>
+    await db.Hookahs.AsNoTracking().FirstOrDefaultAsync(hookah => hookah.Id == id, cancellationToken) is { } hookah
+        ? Results.Ok(hookah)
+        : HttpResults.NotFound("Hookah", id));
 
-app.MapPost("/api/hookahs", (CreateHookahRequest request) =>
+app.MapPost("/api/hookahs", async (CreateHookahRequest request, BranchDbContext db, CancellationToken cancellationToken) =>
 {
-    if (!branches.ContainsKey(request.BranchId))
-    {
-        return HttpResults.NotFound("Branch", request.BranchId);
-    }
-
-    var hookah = new Hookah(Guid.NewGuid(), request.BranchId, request.Name, request.Brand, request.Model, request.Status, request.PhotoUrl, null);
-    hookahs[hookah.Id] = hookah;
+    if (!await db.Branches.AnyAsync(branch => branch.Id == request.BranchId, cancellationToken)) return HttpResults.NotFound("Branch", request.BranchId);
+    var hookah = new HookahEntity { Id = Guid.NewGuid(), BranchId = request.BranchId, Name = request.Name, Brand = request.Brand, Model = request.Model, Status = request.Status, PhotoUrl = request.PhotoUrl, LastServiceAt = null };
+    db.Hookahs.Add(hookah);
+    await db.SaveChangesAsync(cancellationToken);
     return Results.Created($"/api/hookahs/{hookah.Id}", hookah);
 });
 
-app.MapPatch("/api/hookahs/{id:guid}/status", (Guid id, UpdateHookahStatusRequest request) =>
+app.MapPatch("/api/hookahs/{id:guid}/status", async (Guid id, UpdateHookahStatusRequest request, BranchDbContext db, CancellationToken cancellationToken) =>
 {
-    if (!hookahs.TryGetValue(id, out var hookah))
-    {
-        return HttpResults.NotFound("Hookah", id);
-    }
-
-    hookahs[id] = hookah with { Status = request.Status };
-    return Results.Ok(hookahs[id]);
+    var hookah = await db.Hookahs.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    if (hookah is null) return HttpResults.NotFound("Hookah", id);
+    hookah.Status = request.Status;
+    await db.SaveChangesAsync(cancellationToken);
+    return Results.Ok(hookah);
 });
 
 app.Run();
 
-static void SeedBranches(IDictionary<Guid, Branch> branches, IDictionary<Guid, Hall> halls, IDictionary<Guid, Zone> zones, IDictionary<Guid, TableSeat> tables, IDictionary<Guid, Hookah> hookahs, IDictionary<(Guid BranchId, DayOfWeek DayOfWeek), BranchWorkingHours> workingHours)
-{
-    var branchId = Guid.Parse("10000000-0000-0000-0000-000000000001");
-    var hallId = Guid.Parse("20000000-0000-0000-0000-000000000001");
-    var zoneId = Guid.Parse("21000000-0000-0000-0000-000000000001");
-    branches[branchId] = new Branch(branchId, "Hookah Place Center", "Lenina, 1", "+79990000000", "Europe/Moscow", true, DateTimeOffset.UtcNow);
-    halls[hallId] = new Hall(hallId, branchId, "Main hall", "First floor");
-    zones[zoneId] = new Zone(zoneId, branchId, "Main zone", "Central seating area", "#2f7d6d", true);
-    tables[Guid.Parse("30000000-0000-0000-0000-000000000001")] = new TableSeat(Guid.Parse("30000000-0000-0000-0000-000000000001"), hallId, zoneId, "Table 1", 4, "FREE", 120, 300, true);
-    tables[Guid.Parse("30000000-0000-0000-0000-000000000002")] = new TableSeat(Guid.Parse("30000000-0000-0000-0000-000000000002"), hallId, zoneId, "Table 2", 6, "FREE", 260, 300, true);
-    hookahs[Guid.Parse("40000000-0000-0000-0000-000000000001")] = new Hookah(Guid.Parse("40000000-0000-0000-0000-000000000001"), branchId, "Alpha X", "Alpha Hookah", "X", HookahStatuses.Available, null, null);
-
-    foreach (var day in Enum.GetValues<DayOfWeek>())
-    {
-        workingHours[(branchId, day)] = new BranchWorkingHours(branchId, day, new TimeOnly(12, 0), new TimeOnly(2, 0), false);
-    }
-}
-
-public sealed record Branch(Guid Id, string Name, string Address, string Phone, string Timezone, bool IsActive, DateTimeOffset CreatedAt);
-public sealed record Hall(Guid Id, Guid BranchId, string Name, string? Description);
-public sealed record Zone(Guid Id, Guid BranchId, string Name, string? Description, string? Color, bool IsActive);
-public sealed record TableSeat(Guid Id, Guid HallId, Guid? ZoneId, string Name, int Capacity, string Status, decimal XPosition, decimal YPosition, bool IsActive);
-public sealed record Hookah(Guid Id, Guid BranchId, string Name, string Brand, string Model, string Status, string? PhotoUrl, DateTimeOffset? LastServiceAt);
-public sealed record BranchWorkingHours(Guid BranchId, DayOfWeek DayOfWeek, TimeOnly OpensAt, TimeOnly ClosesAt, bool IsClosed);
-public sealed record FloorPlan(Guid BranchId, IReadOnlyCollection<Hall> Halls, IReadOnlyCollection<Zone> Zones, IReadOnlyCollection<TableSeat> Tables);
+public sealed record FloorPlan(Guid BranchId, IReadOnlyCollection<HallEntity> Halls, IReadOnlyCollection<ZoneEntity> Zones, IReadOnlyCollection<TableEntity> Tables);
 public sealed record CreateBranchRequest(string Name, string Address, string Phone, string Timezone);
 public sealed record UpdateBranchRequest(string? Name, string? Address, string? Phone, string? Timezone, bool? IsActive);
 public sealed record UpdateBranchWorkingHoursRequest(DayOfWeek DayOfWeek, TimeOnly OpensAt, TimeOnly ClosesAt, bool IsClosed);

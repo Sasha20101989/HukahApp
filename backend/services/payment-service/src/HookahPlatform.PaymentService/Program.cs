@@ -2,6 +2,7 @@ using HookahPlatform.BuildingBlocks;
 using HookahPlatform.BuildingBlocks.Persistence;
 using HookahPlatform.PaymentService.Persistence;
 using HookahPlatform.Contracts;
+using Microsoft.EntityFrameworkCore;
 using System.Net.Http.Json;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -13,9 +14,7 @@ var app = builder.Build();
 app.UseHookahServiceDefaults();
 app.MapPersistenceHealth<PaymentDbContext>("payment-service");
 
-var payments = new Dictionary<Guid, Payment>();
-
-app.MapPost("/api/payments/create", async (CreatePaymentRequest request, IHttpClientFactory httpClientFactory, IConfiguration configuration, CancellationToken cancellationToken) =>
+app.MapPost("/api/payments/create", async (CreatePaymentRequest request, PaymentDbContext db, IHttpClientFactory httpClientFactory, IConfiguration configuration, CancellationToken cancellationToken) =>
 {
     if (request.Amount <= 0)
     {
@@ -35,8 +34,26 @@ app.MapPost("/api/payments/create", async (CreatePaymentRequest request, IHttpCl
     }
 
     var payableAmount = Math.Max(0, request.Amount - discount);
-    var payment = new Payment(Guid.NewGuid(), request.ClientId, request.OrderId, request.BookingId, request.Amount, discount, payableAmount, 0, request.Currency, request.Provider, request.Promocode, null, PaymentStatuses.Pending, request.Type, DateTimeOffset.UtcNow);
-    payments[payment.Id] = payment;
+    var payment = new PaymentEntity
+    {
+        Id = Guid.NewGuid(),
+        ClientId = request.ClientId,
+        OrderId = request.OrderId,
+        BookingId = request.BookingId,
+        OriginalAmount = request.Amount,
+        DiscountAmount = discount,
+        PayableAmount = payableAmount,
+        RefundedAmount = 0,
+        Currency = request.Currency,
+        Provider = request.Provider,
+        Promocode = request.Promocode,
+        ExternalPaymentId = null,
+        Status = PaymentStatuses.Pending,
+        Type = request.Type,
+        CreatedAt = DateTimeOffset.UtcNow
+    };
+    db.Payments.Add(payment);
+    await db.SaveChangesAsync(cancellationToken);
 
     return Results.Ok(new
     {
@@ -47,16 +64,31 @@ app.MapPost("/api/payments/create", async (CreatePaymentRequest request, IHttpCl
     });
 });
 
-app.MapPost("/api/payments/webhook/yookassa", async (YooKassaWebhook request, IEventPublisher events, IHttpClientFactory httpClientFactory, IConfiguration configuration, CancellationToken cancellationToken) =>
+app.MapPost("/api/payments/webhook/yookassa", async (YooKassaWebhook request, PaymentDbContext db, IEventPublisher events, IHttpClientFactory httpClientFactory, IConfiguration configuration, CancellationToken cancellationToken) =>
 {
-    if (!payments.TryGetValue(request.PaymentId, out var payment))
+    var payment = await db.Payments.FirstOrDefaultAsync(candidate => candidate.Id == request.PaymentId, cancellationToken);
+    if (payment is null)
     {
         return HttpResults.NotFound("Payment", request.PaymentId);
     }
 
-    var status = request.Succeeded ? PaymentStatuses.Success : PaymentStatuses.Failed;
-    var updated = payment with { Status = status, ExternalPaymentId = request.ExternalPaymentId };
-    payments[payment.Id] = updated;
+    payment.Status = request.Succeeded ? PaymentStatuses.Success : PaymentStatuses.Failed;
+    payment.ExternalPaymentId = request.ExternalPaymentId;
+    var outboxEvents = new List<IIntegrationEvent>();
+    if (request.Succeeded)
+    {
+        outboxEvents.Add(new PaymentSucceeded(payment.Id, payment.BookingId, payment.OrderId, payment.PayableAmount, DateTimeOffset.UtcNow));
+        if (payment.BookingId is not null)
+        {
+            outboxEvents.Add(new BookingPaid(payment.BookingId.Value, payment.Id, payment.OriginalAmount, DateTimeOffset.UtcNow));
+        }
+    }
+    else
+    {
+        outboxEvents.Add(new PaymentFailed(payment.Id, request.Reason ?? "Provider rejected payment", DateTimeOffset.UtcNow));
+    }
+    var outboxMessages = db.AddOutboxMessages(outboxEvents);
+    await db.SaveChangesAsync(cancellationToken);
 
     if (request.Succeeded)
     {
@@ -65,10 +97,9 @@ app.MapPost("/api/payments/webhook/yookassa", async (YooKassaWebhook request, IE
             await RedeemPromocodeAsync(payment.Promocode, payment.ClientId, payment.OrderId, payment.OriginalAmount, httpClientFactory, configuration, cancellationToken);
         }
 
-        await events.PublishAsync(new PaymentSucceeded(payment.Id, payment.BookingId, payment.OrderId, payment.PayableAmount, DateTimeOffset.UtcNow));
+        await db.ForwardAndMarkOutboxAsync(events, outboxEvents, outboxMessages, cancellationToken);
         if (payment.BookingId is not null)
         {
-            await events.PublishAsync(new BookingPaid(payment.BookingId.Value, payment.Id, payment.OriginalAmount, DateTimeOffset.UtcNow));
             await ConfirmBookingDepositAsync(payment.BookingId.Value, payment.Id, payment.OriginalAmount, httpClientFactory, configuration, cancellationToken);
         }
         if (payment.OrderId is not null)
@@ -78,18 +109,21 @@ app.MapPost("/api/payments/webhook/yookassa", async (YooKassaWebhook request, IE
     }
     else
     {
-        await events.PublishAsync(new PaymentFailed(payment.Id, request.Reason ?? "Provider rejected payment", DateTimeOffset.UtcNow));
+        await db.ForwardAndMarkOutboxAsync(events, outboxEvents, outboxMessages, cancellationToken);
     }
 
-    return Results.Ok(updated);
+    return Results.Ok(payment);
 });
 
-app.MapGet("/api/payments/{id:guid}", (Guid id) =>
-    payments.TryGetValue(id, out var payment) ? Results.Ok(payment) : HttpResults.NotFound("Payment", id));
+app.MapGet("/api/payments/{id:guid}", async (Guid id, PaymentDbContext db, CancellationToken cancellationToken) =>
+    await db.Payments.AsNoTracking().FirstOrDefaultAsync(payment => payment.Id == id, cancellationToken) is { } payment
+        ? Results.Ok(payment)
+        : HttpResults.NotFound("Payment", id));
 
-app.MapPost("/api/payments/{id:guid}/refund", async (Guid id, RefundRequest request, IEventPublisher events) =>
+app.MapPost("/api/payments/{id:guid}/refund", async (Guid id, RefundRequest request, PaymentDbContext db, IEventPublisher events, CancellationToken cancellationToken) =>
 {
-    if (!payments.TryGetValue(id, out var payment))
+    var payment = await db.Payments.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    if (payment is null)
     {
         return HttpResults.NotFound("Payment", id);
     }
@@ -107,8 +141,12 @@ app.MapPost("/api/payments/{id:guid}/refund", async (Guid id, RefundRequest requ
 
     var totalRefunded = payment.RefundedAmount + request.Amount;
     var status = totalRefunded == payment.PayableAmount ? PaymentStatuses.Refunded : PaymentStatuses.PartiallyRefunded;
-    payments[id] = payment with { Status = status, RefundedAmount = totalRefunded };
-    await events.PublishAsync(new PaymentRefunded(id, payment.BookingId, payment.OrderId, request.Amount, totalRefunded, DateTimeOffset.UtcNow));
+    payment.Status = status;
+    payment.RefundedAmount = totalRefunded;
+    var refunded = new PaymentRefunded(id, payment.BookingId, payment.OrderId, request.Amount, totalRefunded, DateTimeOffset.UtcNow);
+    var outboxMessage = db.AddOutboxMessage(refunded);
+    await db.SaveChangesAsync(cancellationToken);
+    await db.ForwardAndMarkOutboxAsync(events, refunded, outboxMessage, cancellationToken);
     return Results.Ok(new { paymentId = id, status, request.Amount, totalRefunded, request.Reason });
 });
 
@@ -164,7 +202,6 @@ static async Task<PromoRedeemResult> RedeemPromocodeAsync(string code, Guid clie
     return (await response.Content.ReadFromJsonAsync<PromoRedeemResult>(cancellationToken))!;
 }
 
-public sealed record Payment(Guid Id, Guid ClientId, Guid? OrderId, Guid? BookingId, decimal OriginalAmount, decimal DiscountAmount, decimal PayableAmount, decimal RefundedAmount, string Currency, string Provider, string? Promocode, string? ExternalPaymentId, string Status, string Type, DateTimeOffset CreatedAt);
 public sealed record CreatePaymentRequest(Guid ClientId, Guid? OrderId, Guid? BookingId, decimal Amount, string Currency, string Type, string Provider, string? Promocode);
 public sealed record YooKassaWebhook(Guid PaymentId, string ExternalPaymentId, bool Succeeded, string? Reason);
 public sealed record RefundRequest(decimal Amount, string Reason);
