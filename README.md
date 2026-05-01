@@ -8,14 +8,42 @@ Executable monorepo foundation for a hookah CRM/ERP platform.
 - `backend/services` - API Gateway and microservice hosts.
 - `backend/shared/contracts` - integration events and public contracts.
 - `backend/shared/building-blocks` - shared API defaults and domain rules.
-- `infrastructure/docker-compose.yml` - PostgreSQL, Redis, RabbitMQ and service containers.
-- `docs` - architecture, API, events and database notes.
+- `infrastructure/docker-compose.yml` - PostgreSQL, Redis, RabbitMQ, OpenTelemetry Collector and service containers.
+- `docs` - architecture, API, events, observability and database notes.
 
 ## Build
 
 ```bash
 rtk env DOTNET_CLI_HOME=/tmp dotnet build backend/HookahPlatform.sln
 ```
+
+## Run Full Platform Locally
+
+```bash
+corepack pnpm local:up
+```
+
+This starts PostgreSQL, Redis, RabbitMQ, OpenTelemetry Collector, EF migrator, all backend services, API Gateway, CRM app, client app and Nginx through Docker Compose.
+
+Useful variants:
+
+```bash
+corepack pnpm local:up:logs
+corepack pnpm local:reset
+corepack pnpm local:down
+```
+
+Public URLs:
+
+- Client app: `http://localhost:3001`
+- CRM app: `http://localhost:3000`
+- API Gateway: `http://localhost:8080`
+- Nginx client: `http://localhost`
+- Nginx CRM: `http://localhost/crm/`
+- RabbitMQ UI: `http://localhost:15672` (`guest` / `guest`)
+- OpenTelemetry OTLP gRPC: `http://localhost:4317`
+- OpenTelemetry OTLP HTTP: `http://localhost:4318`
+- Prometheus metrics from collector: `http://localhost:9464/metrics`
 
 ## Run One Service
 
@@ -33,12 +61,16 @@ The API Gateway is the public entrypoint at `http://localhost:8080`. Service con
 
 Use [docs/smoke-tests.http](docs/smoke-tests.http) after starting Docker Compose. Requests are written against the gateway.
 
+## Observability
+
+Backend services emit structured Serilog logs plus OpenTelemetry traces/metrics through the local collector. See [docs/observability.md](docs/observability.md).
+
 ## Frontend
 
 ```bash
-pnpm install
-pnpm crm:dev
-pnpm client:dev
+corepack pnpm install
+corepack pnpm crm:dev
+corepack pnpm client:dev
 ```
 
 CRM runs on `http://localhost:3000`. Client app runs on `http://localhost:3001`.
@@ -50,3 +82,7 @@ With Nginx enabled in Compose, `http://localhost` serves the client app, `http:/
 ## Kubernetes
 
 Base manifests live in `infrastructure/kubernetes`.
+
+## Frontend Product Flows
+
+See [docs/frontend.md](docs/frontend.md) for the CRM tablet workspace and client booking PWA flows.

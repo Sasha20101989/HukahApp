@@ -3,9 +3,10 @@ ARG APP_PATH
 FROM node:24-alpine AS deps
 WORKDIR /app
 COPY package.json pnpm-workspace.yaml ./
+COPY pnpm-lock.yaml ./
 COPY frontend/crm-app/package.json frontend/crm-app/package.json
 COPY frontend/client-app/package.json frontend/client-app/package.json
-RUN corepack enable && pnpm install --frozen-lockfile=false
+RUN corepack enable && pnpm install --frozen-lockfile
 
 FROM node:24-alpine AS build
 ARG APP_PATH

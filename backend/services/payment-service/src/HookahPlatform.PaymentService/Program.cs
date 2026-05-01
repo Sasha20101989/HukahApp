@@ -14,8 +14,13 @@ var app = builder.Build();
 app.UseHookahServiceDefaults();
 app.MapPersistenceHealth<PaymentDbContext>("payment-service");
 
-app.MapPost("/api/payments/create", async (CreatePaymentRequest request, PaymentDbContext db, IHttpClientFactory httpClientFactory, IConfiguration configuration, CancellationToken cancellationToken) =>
+app.MapPost("/api/payments/create", async (CreatePaymentRequest request, HttpContext context, PaymentDbContext db, IHttpClientFactory httpClientFactory, IConfiguration configuration, CancellationToken cancellationToken) =>
 {
+    if (!CanActForClient(context, request.ClientId))
+    {
+        return Results.Json(new ProblemDetailsDto("forbidden", "Client payments can only be created for the current user."), statusCode: StatusCodes.Status403Forbidden);
+    }
+
     if (request.Amount <= 0)
     {
         return HttpResults.Validation("Payment amount must be positive.");
@@ -200,6 +205,33 @@ static async Task<PromoRedeemResult> RedeemPromocodeAsync(string code, Guid clie
 
     response.EnsureSuccessStatusCode();
     return (await response.Content.ReadFromJsonAsync<PromoRedeemResult>(cancellationToken))!;
+}
+
+static Guid? GetForwardedUserId(HttpContext context)
+{
+    return Guid.TryParse(context.Request.Headers[ServiceAccessControl.UserIdHeader].ToString(), out var userId)
+        ? userId
+        : null;
+}
+
+static bool IsServiceRequest(HttpContext context)
+{
+    return !string.IsNullOrWhiteSpace(context.Request.Headers[ServiceAccessControl.ServiceNameHeader].ToString());
+}
+
+static bool HasForwardedPermission(HttpContext context, string permission)
+{
+    var permissions = context.Request.Headers[ServiceAccessControl.UserPermissionsHeader].ToString()
+        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    return permissions.Contains("*", StringComparer.OrdinalIgnoreCase) ||
+           permissions.Contains(permission, StringComparer.OrdinalIgnoreCase);
+}
+
+static bool CanActForClient(HttpContext context, Guid clientId)
+{
+    return IsServiceRequest(context) ||
+           HasForwardedPermission(context, PermissionCodes.OrdersManage) ||
+           GetForwardedUserId(context) == clientId;
 }
 
 public sealed record CreatePaymentRequest(Guid ClientId, Guid? OrderId, Guid? BookingId, decimal Amount, string Currency, string Type, string Provider, string? Promocode);

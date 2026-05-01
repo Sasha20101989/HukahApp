@@ -39,6 +39,13 @@ app.Map("/{**path}", async (HttpContext context, IHttpClientFactory httpClientFa
         return;
     }
 
+    if (EndpointAccessPolicy.IsInternal(requestPath))
+    {
+        context.Response.StatusCode = StatusCodes.Status404NotFound;
+        await context.Response.WriteAsJsonAsync(new { code = "internal_endpoint", message = "This endpoint is internal and is not exposed through the gateway." }, cancellationToken);
+        return;
+    }
+
     JwtPrincipal? principal = null;
     var authorization = context.Request.Headers.Authorization.ToString();
     if (authorization.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
@@ -52,7 +59,7 @@ app.Map("/{**path}", async (HttpContext context, IHttpClientFactory httpClientFa
         }
     }
 
-    var requiredPermissions = GatewayAccessPolicy.GetRequiredPermissions(method, requestPath);
+    var requiredPermissions = EndpointAccessPolicy.GetRequiredPermissions(method, requestPath);
     if (requiredPermissions is not null)
     {
         if (principal is null)
@@ -62,9 +69,7 @@ app.Map("/{**path}", async (HttpContext context, IHttpClientFactory httpClientFa
             return;
         }
 
-        var permissions = RolePermissionCatalog.GetPermissions(principal.Role);
-        var hasPermission = permissions.Contains("*") || requiredPermissions.Any(permissions.Contains);
-        if (!hasPermission)
+        if (!EndpointAccessPolicy.HasAnyPermission(principal.Role, requiredPermissions))
         {
             context.Response.StatusCode = StatusCodes.Status403Forbidden;
             await context.Response.WriteAsJsonAsync(new
@@ -93,6 +98,8 @@ app.Map("/{**path}", async (HttpContext context, IHttpClientFactory httpClientFa
         }
     }
 
+    StripSecurityForwardingHeaders(upstreamRequest);
+
     if (context.Request.ContentLength > 0 && upstreamRequest.Content is null)
     {
         upstreamRequest.Content = new StreamContent(context.Request.Body);
@@ -104,13 +111,11 @@ app.Map("/{**path}", async (HttpContext context, IHttpClientFactory httpClientFa
 
     if (principal is not null)
     {
-        upstreamRequest.Headers.Remove("X-User-Id");
-        upstreamRequest.Headers.Remove("X-User-Role");
-        upstreamRequest.Headers.Remove("X-User-Permissions");
         var permissions = RolePermissionCatalog.GetPermissions(principal.Role);
-        upstreamRequest.Headers.Add("X-User-Id", principal.UserId.ToString());
-        upstreamRequest.Headers.Add("X-User-Role", principal.Role);
-        upstreamRequest.Headers.Add("X-User-Permissions", string.Join(",", permissions));
+        upstreamRequest.Headers.Add(ServiceAccessControl.UserIdHeader, principal.UserId.ToString());
+        upstreamRequest.Headers.Add(ServiceAccessControl.UserRoleHeader, principal.Role);
+        upstreamRequest.Headers.Add(ServiceAccessControl.UserPermissionsHeader, string.Join(",", permissions));
+        upstreamRequest.Headers.Add(ServiceAccessControl.GatewaySecretHeader, builder.Configuration["Security:GatewaySecret"] ?? "local-gateway-secret-change-me");
     }
 
     var client = httpClientFactory.CreateClient("gateway");
@@ -132,86 +137,20 @@ app.Map("/{**path}", async (HttpContext context, IHttpClientFactory httpClientFa
 
 app.Run();
 
-public static class GatewayAccessPolicy
+static void StripSecurityForwardingHeaders(HttpRequestMessage request)
 {
-    private static readonly EndpointPermissionRule[] Rules =
-    [
-        new("POST", "/api/users/staff", [PermissionCodes.StaffManage]),
-        new("PATCH", "/api/users", [PermissionCodes.StaffManage]),
-        new("DELETE", "/api/users", [PermissionCodes.StaffManage]),
-        new("POST", "/api/staff", [PermissionCodes.StaffManage]),
-        new("PATCH", "/api/staff", [PermissionCodes.StaffManage]),
-
-        new("POST", "/api/branches", [PermissionCodes.BranchesManage]),
-        new("PATCH", "/api/branches", [PermissionCodes.BranchesManage]),
-        new("POST", "/api/zones", [PermissionCodes.BranchesManage]),
-        new("PATCH", "/api/zones", [PermissionCodes.BranchesManage]),
-        new("POST", "/api/halls", [PermissionCodes.BranchesManage]),
-        new("PATCH", "/api/halls", [PermissionCodes.BranchesManage]),
-        new("POST", "/api/tables", [PermissionCodes.BranchesManage]),
-        new("PATCH", "/api/tables", [PermissionCodes.BranchesManage]),
-        new("POST", "/api/hookahs", [PermissionCodes.BranchesManage]),
-        new("PATCH", "/api/hookahs", [PermissionCodes.BranchesManage]),
-
-        new("POST", "/api/bowls", [PermissionCodes.MixesManage]),
-        new("PATCH", "/api/bowls", [PermissionCodes.MixesManage]),
-        new("DELETE", "/api/bowls", [PermissionCodes.MixesManage]),
-        new("POST", "/api/tobaccos", [PermissionCodes.MixesManage]),
-        new("PATCH", "/api/tobaccos", [PermissionCodes.MixesManage]),
-        new("DELETE", "/api/tobaccos", [PermissionCodes.MixesManage]),
-        new("POST", "/api/mixes", [PermissionCodes.MixesManage]),
-        new("PATCH", "/api/mixes", [PermissionCodes.MixesManage]),
-        new("DELETE", "/api/mixes", [PermissionCodes.MixesManage]),
-
-        new("POST", "/api/inventory", [PermissionCodes.InventoryManage]),
-        new("PATCH", "/api/inventory", [PermissionCodes.InventoryManage]),
-        new("POST", "/api/orders", [PermissionCodes.OrdersManage]),
-        new("PATCH", "/api/orders", [PermissionCodes.OrdersManage]),
-        new("DELETE", "/api/orders", [PermissionCodes.OrdersManage]),
-
-        new("POST", "/api/bookings", [PermissionCodes.BookingsCreate, PermissionCodes.BookingsManage]),
-        new("PATCH", "/api/bookings", [PermissionCodes.BookingsManage]),
-        new("DELETE", "/api/bookings", [PermissionCodes.BookingsManage]),
-        new("POST", "/api/payments/create", [PermissionCodes.BookingsCreate, PermissionCodes.OrdersManage]),
-        new("POST", "/api/payments", [PermissionCodes.OrdersManage]),
-
-        new("POST", "/api/notifications/send", [PermissionCodes.BookingsManage]),
-        new("POST", "/api/reviews", [PermissionCodes.BookingsCreate, PermissionCodes.OrdersManage]),
-        new("POST", "/api/promocodes", [PermissionCodes.OrdersManage]),
-        new("PATCH", "/api/promocodes", [PermissionCodes.OrdersManage])
-    ];
-
-    private static readonly string[] PublicPrefixes =
-    [
-        "/",
-        "/health",
-        "/events/debug",
-        "/api/catalog",
-        "/api/auth",
-        "/api/mixes/calculate",
-        "/api/mixes/recommend",
-        "/api/payments/webhook",
-        "/api/promocodes/validate"
-    ];
-
-    public static IReadOnlyCollection<string>? GetRequiredPermissions(string method, string path)
+    var securityHeaders = new[]
     {
-        if (HttpMethods.IsGet(method) || HttpMethods.IsHead(method) || HttpMethods.IsOptions(method))
-        {
-            return null;
-        }
+        ServiceAccessControl.UserIdHeader,
+        ServiceAccessControl.UserRoleHeader,
+        ServiceAccessControl.UserPermissionsHeader,
+        ServiceAccessControl.GatewaySecretHeader,
+        ServiceAccessControl.ServiceNameHeader,
+        ServiceAccessControl.ServiceSecretHeader
+    };
 
-        if (PublicPrefixes.Any(prefix => path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && prefix != "/"))
-        {
-            return null;
-        }
-
-        return Rules
-            .Where(rule => method.Equals(rule.Method, StringComparison.OrdinalIgnoreCase) &&
-                           path.StartsWith(rule.PathPrefix, StringComparison.OrdinalIgnoreCase))
-            .OrderByDescending(rule => rule.PathPrefix.Length)
-            .FirstOrDefault()?.RequiredPermissions ?? [PermissionCodes.StaffManage];
+    foreach (var header in securityHeaders)
+    {
+        request.Headers.Remove(header);
     }
 }
-
-public sealed record EndpointPermissionRule(string Method, string PathPrefix, IReadOnlyCollection<string> RequiredPermissions);

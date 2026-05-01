@@ -1,20 +1,21 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import { Providers } from "./providers";
 
 export const metadata: Metadata = {
   title: "Hookah CRM",
-  description: "Operational CRM workspace for hookah venues",
+  description: "Tablet-first CRM workspace for hookah venue staff",
   manifest: "/manifest.webmanifest"
 };
 
 export const viewport: Viewport = {
-  themeColor: "#1f7a66"
+  themeColor: "#183f35"
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="ru">
-      <body>{children}</body>
+      <body><Providers>{children}</Providers></body>
     </html>
   );
 }

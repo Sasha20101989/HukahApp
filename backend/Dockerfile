@@ -1,6 +1,7 @@
 ARG PROJECT_PATH
 
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+ARG PROJECT_PATH
 WORKDIR /src
 COPY backend ./backend
 RUN dotnet restore "backend/${PROJECT_PATH}"

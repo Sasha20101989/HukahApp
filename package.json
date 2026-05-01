@@ -7,9 +7,13 @@
     "frontend/client-app"
   ],
   "scripts": {
-    "crm:dev": "pnpm --dir frontend/crm-app dev",
-    "client:dev": "pnpm --dir frontend/client-app dev",
-    "frontend:lint": "pnpm --dir frontend/crm-app lint && pnpm --dir frontend/client-app lint",
-    "frontend:build": "pnpm --dir frontend/crm-app build && pnpm --dir frontend/client-app build"
+    "local:up": "bash scripts/local-up.sh",
+    "local:up:logs": "bash scripts/local-up.sh --logs",
+    "local:reset": "bash scripts/local-up.sh --reset",
+    "local:down": "docker compose -p hookah-platform -f infrastructure/docker-compose.yml down",
+    "crm:dev": "corepack pnpm --dir frontend/crm-app dev",
+    "client:dev": "corepack pnpm --dir frontend/client-app dev",
+    "frontend:lint": "corepack pnpm --dir frontend/crm-app lint && corepack pnpm --dir frontend/client-app lint",
+    "frontend:build": "corepack pnpm --dir frontend/crm-app build && corepack pnpm --dir frontend/client-app build"
   }
 }

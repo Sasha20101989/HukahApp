@@ -9,6 +9,12 @@ x-service-events: &service-events
   RabbitMQ__Password: guest
   RabbitMQ__VirtualHost: /
   RabbitMQ__Exchange: hookah.platform.events
+  Redis__Enabled: "true"
+  ConnectionStrings__Redis: redis:6379
+  Security__GatewaySecret: local-gateway-secret-change-me
+  Security__InternalServiceSecret: local-service-secret-change-me
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+  OTEL_EXPORTER_OTLP_PROTOCOL: grpc
 
 services:
   nginx:
@@ -61,6 +67,9 @@ services:
       Jwt__Issuer: hookah-platform
       Jwt__Audience: hookah-platform-clients
       Jwt__Secret: change-this-secret-before-production-change-this-secret
+      Security__GatewaySecret: local-gateway-secret-change-me
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
     depends_on:
       - auth-service
       - user-service
@@ -88,6 +97,9 @@ services:
       Jwt__Audience: hookah-platform-clients
       Jwt__Secret: change-this-secret-before-production-change-this-secret
       Services__user-service__BaseUrl: http://user-service:8080
+    depends_on:
+      db-migrator:
+        condition: service_completed_successfully
 
   user-service:
     build:
@@ -98,6 +110,9 @@ services:
     command: ["HookahPlatform.UserService.dll"]
     environment:
       <<: *service-events
+    depends_on:
+      db-migrator:
+        condition: service_completed_successfully
 
   branch-service:
     build:
@@ -108,6 +123,9 @@ services:
     command: ["HookahPlatform.BranchService.dll"]
     environment:
       <<: *service-events
+    depends_on:
+      db-migrator:
+        condition: service_completed_successfully
 
   mixology-service:
     build:
@@ -119,6 +137,9 @@ services:
     environment:
       <<: *service-events
       Services__inventory-service__BaseUrl: http://inventory-service:8080
+    depends_on:
+      db-migrator:
+        condition: service_completed_successfully
 
   inventory-service:
     build:
@@ -129,6 +150,16 @@ services:
     command: ["HookahPlatform.InventoryService.dll"]
     environment:
       <<: *service-events
+      Services__mixology-service__BaseUrl: http://mixology-service:8080
+      RabbitMQ__Consumers__Enabled: "true"
+      RabbitMQ__Consumers__InventoryQueue: inventory.order-served
+    depends_on:
+      db-migrator:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_started
+      mixology-service:
+        condition: service_started
 
   order-service:
     build:
@@ -142,6 +173,9 @@ services:
       Services__mixology-service__BaseUrl: http://mixology-service:8080
       Services__inventory-service__BaseUrl: http://inventory-service:8080
       Services__branch-service__BaseUrl: http://branch-service:8080
+    depends_on:
+      db-migrator:
+        condition: service_completed_successfully
 
   booking-service:
     build:
@@ -153,6 +187,9 @@ services:
     environment:
       <<: *service-events
       Services__user-service__BaseUrl: http://user-service:8080
+    depends_on:
+      db-migrator:
+        condition: service_completed_successfully
 
   payment-service:
     build:
@@ -166,6 +203,9 @@ services:
       Services__booking-service__BaseUrl: http://booking-service:8080
       Services__order-service__BaseUrl: http://order-service:8080
       Services__promo-service__BaseUrl: http://promo-service:8080
+    depends_on:
+      db-migrator:
+        condition: service_completed_successfully
 
   notification-service:
     build:
@@ -176,6 +216,13 @@ services:
     command: ["HookahPlatform.NotificationService.dll"]
     environment:
       <<: *service-events
+      RabbitMQ__Consumers__Enabled: "true"
+      RabbitMQ__Consumers__NotificationQueue: notification.events
+    depends_on:
+      db-migrator:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_started
 
   analytics-service:
     build:
@@ -189,9 +236,13 @@ services:
       Outbox__Dispatcher__Enabled: "true"
       Outbox__Dispatcher__BatchSize: "50"
       Outbox__Dispatcher__IntervalSeconds: "10"
+      RabbitMQ__Consumers__Enabled: "true"
+      RabbitMQ__Consumers__AnalyticsQueue: analytics.events
     depends_on:
-      - postgres
-      - rabbitmq
+      db-migrator:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_started
 
   review-service:
     build:
@@ -202,6 +253,9 @@ services:
     command: ["HookahPlatform.ReviewService.dll"]
     environment:
       <<: *service-events
+    depends_on:
+      db-migrator:
+        condition: service_completed_successfully
 
   promo-service:
     build:
@@ -212,6 +266,9 @@ services:
     command: ["HookahPlatform.PromoService.dll"]
     environment:
       <<: *service-events
+    depends_on:
+      db-migrator:
+        condition: service_completed_successfully
 
   postgres:
     image: postgres:16
@@ -221,8 +278,25 @@ services:
       POSTGRES_PASSWORD: hookah
     ports:
       - "5432:5432"
-    volumes:
-      - ./postgres/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hookah -d hookah"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  db-migrator:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+      args:
+        PROJECT_PATH: infrastructure/migrations/src/HookahPlatform.Migrations/HookahPlatform.Migrations.csproj
+    command: ["HookahPlatform.Migrations.dll"]
+    environment:
+      ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=hookah;Username=hookah;Password=hookah
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
 
   redis:
     image: redis:7
@@ -238,3 +312,13 @@ services:
       - "15672:15672"
     volumes:
       - ./rabbitmq/definitions.json:/etc/rabbitmq/definitions.json:ro
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.104.0
+    command: ["--config=/etc/otelcol-contrib/config.yml"]
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+      - "9464:9464"
+    volumes:
+      - ./otel-collector/config.yml:/etc/otelcol-contrib/config.yml:ro

@@ -17,13 +17,18 @@ var rolePermissions = RolePermissionCatalog.Roles.ToDictionary(
     role => role.Code,
     role => role.Permissions.ToHashSet(StringComparer.OrdinalIgnoreCase),
     StringComparer.OrdinalIgnoreCase);
-var currentUserId = Guid.Parse("90000000-0000-0000-0000-000000000000");
 
-app.MapGet("/api/users/me", async (UserDbContext db, CancellationToken cancellationToken) =>
+app.MapGet("/api/users/me", async (HttpContext context, UserDbContext db, CancellationToken cancellationToken) =>
 {
+    var currentUserId = GetForwardedUserId(context);
+    if (currentUserId is null)
+    {
+        return Results.Json(new ProblemDetailsDto("user_context_required", "Forwarded user context is required."), statusCode: StatusCodes.Status401Unauthorized);
+    }
+
     var roles = await LoadRolesAsync(db, cancellationToken);
-    var user = await db.Users.AsNoTracking().FirstOrDefaultAsync(candidate => candidate.Id == currentUserId, cancellationToken);
-    return user is null ? HttpResults.NotFound("User", currentUserId) : Results.Ok(ToProfile(user, roles));
+    var user = await db.Users.AsNoTracking().FirstOrDefaultAsync(candidate => candidate.Id == currentUserId.Value, cancellationToken);
+    return user is null ? HttpResults.NotFound("User", currentUserId.Value) : Results.Ok(ToProfile(user, roles));
 });
 
 app.MapGet("/api/users", async (string? role, Guid? branchId, string? status, UserDbContext db, CancellationToken cancellationToken) =>
@@ -60,8 +65,13 @@ app.MapGet("/api/roles", () => Results.Ok(RolePermissionCatalog.Roles.Select(rol
 
 app.MapGet("/api/permissions", () => Results.Ok(RolePermissionCatalog.Permissions.OrderBy(permission => permission.Code)));
 
-app.MapGet("/api/users/{id:guid}/permissions", async (Guid id, UserDbContext db, CancellationToken cancellationToken) =>
+app.MapGet("/api/users/{id:guid}/permissions", async (Guid id, HttpContext context, UserDbContext db, CancellationToken cancellationToken) =>
 {
+    if (!IsServiceRequest(context) && GetForwardedUserId(context) != id && !HasForwardedPermission(context, PermissionCodes.StaffManage))
+    {
+        return Results.Json(new ProblemDetailsDto("forbidden", "User permissions can only be read by the same user or staff managers."), statusCode: StatusCodes.Status403Forbidden);
+    }
+
     var roles = await LoadRolesAsync(db, cancellationToken);
     var user = await db.Users.AsNoTracking().FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
     if (user is null)
@@ -184,8 +194,16 @@ app.MapPatch("/api/users/{id:guid}", async (Guid id, UpdateUserRequest request, 
     return Results.Ok(ToProfile(user, roles));
 });
 
-app.MapGet("/api/users/{id:guid}/booking-eligibility", async (Guid id, UserDbContext db, CancellationToken cancellationToken) =>
+app.MapGet("/api/users/{id:guid}/booking-eligibility", async (Guid id, HttpContext context, UserDbContext db, CancellationToken cancellationToken) =>
 {
+    if (!IsServiceRequest(context) &&
+        GetForwardedUserId(context) != id &&
+        !HasForwardedPermission(context, PermissionCodes.BookingsManage) &&
+        !HasForwardedPermission(context, PermissionCodes.StaffManage))
+    {
+        return Results.Json(new ProblemDetailsDto("forbidden", "Booking eligibility can only be read by the same user or booking/staff managers."), statusCode: StatusCodes.Status403Forbidden);
+    }
+
     var user = await db.Users.AsNoTracking().FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
     if (user is null)
     {
@@ -292,6 +310,26 @@ static string? ResolveRoleCode(string role)
         candidate.Code.Equals(role, StringComparison.OrdinalIgnoreCase) ||
         candidate.Name.Equals(role, StringComparison.OrdinalIgnoreCase) ||
         candidate.Code.Replace("_", string.Empty).Equals(role, StringComparison.OrdinalIgnoreCase))?.Code;
+}
+
+static Guid? GetForwardedUserId(HttpContext context)
+{
+    return Guid.TryParse(context.Request.Headers[ServiceAccessControl.UserIdHeader].ToString(), out var userId)
+        ? userId
+        : null;
+}
+
+static bool IsServiceRequest(HttpContext context)
+{
+    return !string.IsNullOrWhiteSpace(context.Request.Headers[ServiceAccessControl.ServiceNameHeader].ToString());
+}
+
+static bool HasForwardedPermission(HttpContext context, string permission)
+{
+    var permissions = context.Request.Headers[ServiceAccessControl.UserPermissionsHeader].ToString()
+        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    return permissions.Contains("*", StringComparer.OrdinalIgnoreCase) ||
+           permissions.Contains(permission, StringComparer.OrdinalIgnoreCase);
 }
 
 public sealed record CreateStaffRequest(string Name, string Phone, string Role, Guid BranchId);
