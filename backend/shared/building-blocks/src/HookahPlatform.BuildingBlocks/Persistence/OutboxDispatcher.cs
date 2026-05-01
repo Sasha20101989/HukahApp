@@ -9,6 +9,7 @@ namespace HookahPlatform.BuildingBlocks.Persistence;
 public sealed class OutboxDispatcher(
     IServiceScopeFactory scopeFactory,
     IEventPublisher publisher,
+    IOutboxBrokerPublisher brokerPublisher,
     IConfiguration configuration,
     ILogger<OutboxDispatcher> logger) : BackgroundService
 {
@@ -31,11 +32,20 @@ public sealed class OutboxDispatcher(
 
         foreach (var message in messages)
         {
+            var published = await brokerPublisher.PublishAsync(message, cancellationToken);
+            if (published)
+            {
+                dispatched++;
+                message.ProcessedAt = DateTimeOffset.UtcNow;
+                message.Error = null;
+                continue;
+            }
+
             var integrationEvent = OutboxMessageSerializer.Deserialize(message);
             if (integrationEvent is null)
             {
                 failed++;
-                message.Error = $"Unknown integration event type '{message.EventName}'.";
+                message.Error = $"RabbitMQ publish failed and event type '{message.EventName}' is unknown for HTTP fallback.";
                 continue;
             }
 
@@ -49,7 +59,7 @@ public sealed class OutboxDispatcher(
             else
             {
                 failed++;
-                message.Error = "Outbox dispatcher forwarding failed.";
+                message.Error = "RabbitMQ publish and HTTP fallback forwarding failed.";
             }
         }
 

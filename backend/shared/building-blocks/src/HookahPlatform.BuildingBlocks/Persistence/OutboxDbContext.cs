@@ -56,7 +56,6 @@ public static class OutboxDbContextExtensions
     public static async Task ForwardAndMarkOutboxAsync(this DbContext db, IEventPublisher publisher, IIntegrationEvent integrationEvent, OutboxMessage outboxMessage, CancellationToken cancellationToken)
     {
         var forwarded = await publisher.ForwardAsync(integrationEvent, cancellationToken);
-        outboxMessage.ProcessedAt = forwarded ? DateTimeOffset.UtcNow : null;
         outboxMessage.Error = forwarded ? null : "Immediate forwarding failed; waiting for outbox dispatcher.";
         await db.SaveChangesAsync(cancellationToken);
     }
@@ -66,7 +65,6 @@ public static class OutboxDbContextExtensions
         foreach (var pair in integrationEvents.Zip(outboxMessages))
         {
             var forwarded = await publisher.ForwardAsync(pair.First, cancellationToken);
-            pair.Second.ProcessedAt = forwarded ? DateTimeOffset.UtcNow : null;
             pair.Second.Error = forwarded ? null : "Immediate forwarding failed; waiting for outbox dispatcher.";
         }
 

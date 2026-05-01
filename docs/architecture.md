@@ -7,7 +7,7 @@ The repository follows the requested microservice layout:
 - `backend/shared/building-blocks` contains shared API defaults and domain primitives.
 - `infrastructure/docker-compose.yml` defines service containers plus PostgreSQL, Redis and RabbitMQ.
 
-Current implementation is the first executable platform slice. API boundaries, endpoint names and critical business rules match the technical specification. PostgreSQL, RabbitMQ, Redis and Docker Compose are already represented in the repository; the next backend step is replacing temporary process-local repositories with EF Core persistence and RabbitMQ consumers.
+Current implementation is an executable platform slice. API boundaries, endpoint names and critical business rules match the technical specification. PostgreSQL persistence, transactional outbox, RabbitMQ publishing, HTTP fallback fan-out and Docker Compose wiring are represented in the repository; the next backend step is adding dedicated RabbitMQ consumers and deeper Redis-backed runtime state.
 
 The gateway uses `ServiceCatalog.Routes` so secondary API groups, such as `/api/bowls`, `/api/tobaccos` and `/api/hookahs`, are routed to the correct owning services.
 

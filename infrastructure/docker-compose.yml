@@ -2,6 +2,13 @@ x-service-events: &service-events
   ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=hookah;Username=hookah;Password=hookah
   Services__analytics-service__BaseUrl: http://analytics-service:8080
   Services__notification-service__BaseUrl: http://notification-service:8080
+  RabbitMQ__Enabled: "true"
+  RabbitMQ__HostName: rabbitmq
+  RabbitMQ__Port: "5672"
+  RabbitMQ__UserName: guest
+  RabbitMQ__Password: guest
+  RabbitMQ__VirtualHost: /
+  RabbitMQ__Exchange: hookah.platform.events
 
 services:
   nginx:
@@ -182,6 +189,9 @@ services:
       Outbox__Dispatcher__Enabled: "true"
       Outbox__Dispatcher__BatchSize: "50"
       Outbox__Dispatcher__IntervalSeconds: "10"
+    depends_on:
+      - postgres
+      - rabbitmq
 
   review-service:
     build:

@@ -19,6 +19,7 @@ public static class ApiDefaults
         builder.AddOutboxPersistence();
         builder.Services.AddSingleton<InMemoryEventStore>();
         builder.Services.AddSingleton<IEventPublisher, EventForwardingPublisher>();
+        builder.Services.AddSingleton<IOutboxBrokerPublisher, RabbitMqOutboxPublisher>();
         builder.Services.AddSingleton<OutboxDispatcher>();
         builder.Services.AddHostedService(provider => provider.GetRequiredService<OutboxDispatcher>());
         builder.Services.AddSingleton<JwtTokenService>();

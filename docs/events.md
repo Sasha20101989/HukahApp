@@ -22,12 +22,12 @@ Implemented event contracts:
 - `ReviewCreated`
 - `MixCreated`
 
-`IEventPublisher` is the application boundary for event delivery. Domain services now use transactional outbox writes for business events: the service DbContext maps `integration_outbox`, adds the outbox row before `SaveChangesAsync`, and only then calls `ForwardAsync` for best-effort HTTP fan-out to Analytics/Notification service endpoints.
+`IEventPublisher` is the application boundary for immediate local fan-out. Domain services use transactional outbox writes for business events: the service DbContext maps `integration_outbox`, adds the outbox row before `SaveChangesAsync`, and then may call `ForwardAsync` for best-effort HTTP fan-out to Analytics/Notification service endpoints.
 
 `PublishAsync` remains available for infrastructure-level publishing when a handler does not already use the domain DbContext. `ForwardAsync` does not create another outbox row, so handlers that persist the outbox atomically do not duplicate events.
 
-RabbitMQ delivery should be implemented as an outbox dispatcher that reads pending `integration_outbox` rows, publishes to `hookah.platform.events` with the routing key from `MessagingCatalog`, and sets `processed_at` only after broker confirmation.
+RabbitMQ delivery is implemented as an outbox dispatcher that reads pending `integration_outbox` rows, publishes to `hookah.platform.events` with the routing key from `MessagingCatalog`, and sets `processed_at` only after RabbitMQ publisher confirmation.
 
-The current dispatcher implementation can replay pending outbox rows through the same HTTP fan-out path via `POST /outbox/dispatch`. A background dispatcher is registered but disabled by default; enable it in exactly one service process with `Outbox__Dispatcher__Enabled=true` to avoid competing workers while RabbitMQ publishing is still replaced by local HTTP fan-out.
+If RabbitMQ publishing fails or `RabbitMQ__Enabled=false`, the dispatcher falls back to the same HTTP fan-out path. `POST /outbox/dispatch` can replay pending rows manually. A background dispatcher is registered but disabled by default; enable it in exactly one service process with `Outbox__Dispatcher__Enabled=true` to avoid competing workers.
 
 Analytics and Notification consumers receive `eventId` in fan-out payloads and persist handled ids in `processed_integration_events`. This makes retries safe: duplicate deliveries return success without re-applying counters or creating duplicate CRM notifications.
