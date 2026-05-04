@@ -1,6 +1,7 @@
 using HookahPlatform.Contracts;
 using HookahPlatform.BuildingBlocks.Persistence;
 using HookahPlatform.BuildingBlocks.Security;
+using HookahPlatform.BuildingBlocks.Tenancy;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Caching.Distributed;
@@ -19,6 +20,8 @@ public static class ApiDefaults
     {
         builder.AddHookahObservability(serviceName);
         builder.Services.AddSingleton(new ServiceInfo(serviceName));
+        builder.Services.AddScoped<TenantContext>();
+        builder.Services.AddScoped<ITenantContext>(sp => sp.GetRequiredService<TenantContext>());
         builder.Services.AddTransient<ServiceAuthenticationHandler>();
         builder.Services.AddSingleton<IHttpMessageHandlerBuilderFilter, ServiceAuthenticationHttpMessageHandlerFilter>();
         builder.Services.AddHttpClient();
@@ -42,6 +45,7 @@ public static class ApiDefaults
     {
         app.UseCors();
         app.UseHookahObservability();
+        app.UseMiddleware<TenantMiddleware>();
         app.UseServiceAccessControl();
 
         app.MapGet("/", (ServiceInfo service) => Results.Ok(new
