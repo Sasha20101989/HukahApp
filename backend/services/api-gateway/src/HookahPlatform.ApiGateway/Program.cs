@@ -119,18 +119,22 @@ app.Map("/{**path}", async (HttpContext context, IHttpClientFactory httpClientFa
         upstreamRequest.Headers.Add(ServiceAccessControl.GatewaySecretHeader, builder.Configuration["Security:GatewaySecret"] ?? "local-gateway-secret-change-me");
     }
 
-    // Tenant routing is resolved at the gateway boundary. For now we support header-based routing
-    // to keep local/dev environments simple; production will likely route by host/subdomain.
-    if (context.Request.Headers.TryGetValue(TenantHeaders.TenantId, out var tenantId) && !string.IsNullOrWhiteSpace(tenantId))
-    {
-        upstreamRequest.Headers.Remove(TenantHeaders.TenantId);
-        upstreamRequest.Headers.TryAddWithoutValidation(TenantHeaders.TenantId, tenantId.ToString());
-        if (context.Request.Headers.TryGetValue(TenantHeaders.TenantSlug, out var tenantSlug) && !string.IsNullOrWhiteSpace(tenantSlug))
-        {
-            upstreamRequest.Headers.Remove(TenantHeaders.TenantSlug);
-            upstreamRequest.Headers.TryAddWithoutValidation(TenantHeaders.TenantSlug, tenantSlug.ToString());
-        }
-    }
+    // Tenant routing is resolved at the gateway boundary.
+    // For now:
+    // - If caller provides `X-Tenant-Id`, forward it.
+    // - Otherwise, default to demo tenant for local/dev compatibility.
+    var forwardedTenantId = context.Request.Headers.TryGetValue(TenantHeaders.TenantId, out var tenantIdHeader) && !string.IsNullOrWhiteSpace(tenantIdHeader)
+        ? tenantIdHeader.ToString()
+        : TenantConstants.DemoTenantId.ToString();
+
+    var forwardedTenantSlug = context.Request.Headers.TryGetValue(TenantHeaders.TenantSlug, out var tenantSlugHeader) && !string.IsNullOrWhiteSpace(tenantSlugHeader)
+        ? tenantSlugHeader.ToString()
+        : TenantConstants.DemoTenantSlug;
+
+    upstreamRequest.Headers.Remove(TenantHeaders.TenantId);
+    upstreamRequest.Headers.Remove(TenantHeaders.TenantSlug);
+    upstreamRequest.Headers.TryAddWithoutValidation(TenantHeaders.TenantId, forwardedTenantId);
+    upstreamRequest.Headers.TryAddWithoutValidation(TenantHeaders.TenantSlug, forwardedTenantSlug);
 
     var client = httpClientFactory.CreateClient("gateway");
     using var upstreamResponse = await client.SendAsync(upstreamRequest, HttpCompletionOption.ResponseHeadersRead, cancellationToken);

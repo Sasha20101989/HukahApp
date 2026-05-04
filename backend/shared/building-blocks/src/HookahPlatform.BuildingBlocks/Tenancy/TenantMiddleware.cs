@@ -38,7 +38,6 @@ public sealed class TenantMiddleware
         }
         else
         {
-            // Tenant-aware services will enforce presence once tenant routing is enabled in the gateway.
             if (httpContext.Request.Headers.ContainsKey(TenantHeaders.TenantSlug))
             {
                 httpContext.Response.StatusCode = StatusCodes.Status400BadRequest;
@@ -54,4 +53,3 @@ public sealed class TenantMiddleware
         await _next(httpContext);
     }
 }
-
