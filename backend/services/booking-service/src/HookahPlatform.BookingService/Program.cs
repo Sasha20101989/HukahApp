@@ -1,6 +1,7 @@
 using HookahPlatform.BookingService.Persistence;
 using HookahPlatform.BuildingBlocks;
 using HookahPlatform.BuildingBlocks.Persistence;
+using HookahPlatform.BuildingBlocks.Tenancy;
 using HookahPlatform.Contracts;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.EntityFrameworkCore;
@@ -27,9 +28,10 @@ var allowedBookingStatuses = new HashSet<string>(StringComparer.OrdinalIgnoreCas
     BookingStatuses.NoShow
 };
 
-app.MapGet("/api/bookings/availability", async (Guid branchId, DateOnly date, TimeOnly time, int guestsCount, BookingDbContext db, IHttpClientFactory httpClientFactory, IConfiguration configuration, IDistributedCache cache, CancellationToken cancellationToken) =>
+app.MapGet("/api/bookings/availability", async (Guid branchId, DateOnly date, TimeOnly time, int guestsCount, BookingDbContext db, ITenantContext tenantContext, IHttpClientFactory httpClientFactory, IConfiguration configuration, IDistributedCache cache, CancellationToken cancellationToken) =>
 {
-    var availabilityCacheKey = AvailabilityCacheKey(branchId, date, time, guestsCount);
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var availabilityCacheKey = AvailabilityCacheKey(tenantId, branchId, date, time, guestsCount);
     var cachedAvailability = await cache.GetJsonAsync<BookingTable[]>(availabilityCacheKey, cancellationToken);
     if (cachedAvailability is not null) return Results.Ok(cachedAvailability);
 
@@ -40,8 +42,10 @@ app.MapGet("/api/bookings/availability", async (Guid branchId, DateOnly date, Ti
 
     var tables = await GetBranchTablesAsync(branchId, httpClientFactory, configuration, cache, cancellationToken);
 
-    var branchBookings = await db.Bookings.AsNoTracking().Where(booking => booking.BranchId == branchId && booking.Status != BookingStatuses.Cancelled && booking.Status != BookingStatuses.NoShow).ToListAsync(cancellationToken);
-    var branchHolds = await GetActiveHoldsAsync(cache, branchId, date, cancellationToken);
+    var branchBookings = await db.Bookings.AsNoTracking()
+        .Where(booking => booking.TenantId == tenantId && booking.BranchId == branchId && booking.Status != BookingStatuses.Cancelled && booking.Status != BookingStatuses.NoShow)
+        .ToListAsync(cancellationToken);
+    var branchHolds = await GetActiveHoldsAsync(cache, tenantId, branchId, date, cancellationToken);
     var available = tables
         .Where(table => table.BranchId == branchId && table.IsActive && table.Capacity >= guestsCount)
         .Where(table => branchBookings.All(booking => booking.TableId != table.Id || !DomainRules.Intersects(start, end, booking.StartTime, booking.EndTime)))
@@ -53,19 +57,21 @@ app.MapGet("/api/bookings/availability", async (Guid branchId, DateOnly date, Ti
     return Results.Ok(availableTables);
 });
 
-app.MapPost("/api/bookings/holds", async (CreateBookingHoldRequest request, HttpContext context, BookingDbContext db, IHttpClientFactory httpClientFactory, IConfiguration configuration, IDistributedCache cache, CancellationToken cancellationToken) =>
+app.MapPost("/api/bookings/holds", async (CreateBookingHoldRequest request, HttpContext context, BookingDbContext db, ITenantContext tenantContext, IHttpClientFactory httpClientFactory, IConfiguration configuration, IDistributedCache cache, CancellationToken cancellationToken) =>
 {
     if (!CanActForClient(context, request.ClientId))
     {
         return Results.Json(new ProblemDetailsDto("forbidden", "Client booking holds can only be created for the current user."), statusCode: StatusCodes.Status403Forbidden);
     }
 
+    var tenantId = tenantContext.GetTenantIdOrDemo();
     var table = (await GetBranchTablesAsync(request.BranchId, httpClientFactory, configuration, cache, cancellationToken)).FirstOrDefault(candidate => candidate.Id == request.TableId);
     if (table is null) return HttpResults.NotFound("Table", request.TableId);
     if (table.Capacity < request.GuestsCount) return HttpResults.Validation("Table capacity is less than guests count.");
 
     var date = DateOnly.FromDateTime(request.StartTime.UtcDateTime);
     var bookingIntersects = await db.Bookings.AnyAsync(booking =>
+        booking.TenantId == tenantId &&
         booking.TableId == request.TableId &&
         booking.Status != BookingStatuses.Cancelled &&
         booking.Status != BookingStatuses.NoShow &&
@@ -74,34 +80,36 @@ app.MapPost("/api/bookings/holds", async (CreateBookingHoldRequest request, Http
         cancellationToken);
     if (bookingIntersects) return HttpResults.Conflict("Booking time intersects with an existing booking.");
 
-    var holdIntersects = (await GetActiveHoldsAsync(cache, request.BranchId, date, cancellationToken)).Any(hold =>
+    var holdIntersects = (await GetActiveHoldsAsync(cache, tenantId, request.BranchId, date, cancellationToken)).Any(hold =>
         hold.TableId == request.TableId &&
         request.StartTime < hold.EndTime &&
         request.EndTime > hold.StartTime);
     if (holdIntersects) return HttpResults.Conflict("Booking time is temporarily held by another client.");
 
     var now = DateTimeOffset.UtcNow;
-    var hold = new BookingHold(Guid.NewGuid(), request.BranchId, request.TableId, request.ClientId, request.StartTime, request.EndTime, request.GuestsCount, now, now.AddMinutes(10));
+    var hold = new BookingHold(Guid.NewGuid(), tenantId, request.BranchId, request.TableId, request.ClientId, request.StartTime, request.EndTime, request.GuestsCount, now, now.AddMinutes(10));
     await StoreHoldAsync(cache, hold, cancellationToken);
-    await cache.RemoveAsync(AvailabilityCacheKey(request.BranchId, date, TimeOnly.FromDateTime(request.StartTime.UtcDateTime), request.GuestsCount), cancellationToken);
+    await cache.RemoveAsync(AvailabilityCacheKey(tenantId, request.BranchId, date, TimeOnly.FromDateTime(request.StartTime.UtcDateTime), request.GuestsCount), cancellationToken);
     return Results.Created($"/api/bookings/holds/{hold.Id}", hold);
 });
 
-app.MapDelete("/api/bookings/holds/{id:guid}", async (Guid id, IDistributedCache cache, CancellationToken cancellationToken) =>
+app.MapDelete("/api/bookings/holds/{id:guid}", async (Guid id, ITenantContext tenantContext, IDistributedCache cache, CancellationToken cancellationToken) =>
 {
-    var hold = await cache.GetJsonAsync<BookingHold>(HoldKey(id), cancellationToken);
-    await cache.RemoveAsync(HoldKey(id), cancellationToken);
-    if (hold is not null) await cache.RemoveAsync(AvailabilityCacheKey(hold.BranchId, DateOnly.FromDateTime(hold.StartTime.UtcDateTime), TimeOnly.FromDateTime(hold.StartTime.UtcDateTime), hold.GuestsCount), cancellationToken);
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var hold = await cache.GetJsonAsync<BookingHold>(HoldKey(tenantId, id), cancellationToken);
+    await cache.RemoveAsync(HoldKey(tenantId, id), cancellationToken);
+    if (hold is not null) await cache.RemoveAsync(AvailabilityCacheKey(tenantId, hold.BranchId, DateOnly.FromDateTime(hold.StartTime.UtcDateTime), TimeOnly.FromDateTime(hold.StartTime.UtcDateTime), hold.GuestsCount), cancellationToken);
     return Results.NoContent();
 });
 
-app.MapPost("/api/bookings", async (CreateBookingRequest request, HttpContext context, BookingDbContext db, IEventPublisher events, IHttpClientFactory httpClientFactory, IConfiguration configuration, IDistributedCache cache, CancellationToken cancellationToken) =>
+app.MapPost("/api/bookings", async (CreateBookingRequest request, HttpContext context, BookingDbContext db, ITenantContext tenantContext, IEventPublisher events, IHttpClientFactory httpClientFactory, IConfiguration configuration, IDistributedCache cache, CancellationToken cancellationToken) =>
 {
     if (!CanActForClient(context, request.ClientId))
     {
         return Results.Json(new ProblemDetailsDto("forbidden", "Client bookings can only be created for the current user."), statusCode: StatusCodes.Status403Forbidden);
     }
 
+    var tenantId = tenantContext.GetTenantIdOrDemo();
     var table = (await GetBranchTablesAsync(request.BranchId, httpClientFactory, configuration, cache, cancellationToken)).FirstOrDefault(candidate => candidate.Id == request.TableId);
     if (table is null) return HttpResults.NotFound("Table", request.TableId);
     if (table.Capacity < request.GuestsCount) return HttpResults.Validation("Table capacity is less than guests count.");
@@ -112,6 +120,7 @@ app.MapPost("/api/bookings", async (CreateBookingRequest request, HttpContext co
     if (!eligibility.IsEligible) return HttpResults.Conflict(eligibility.Reason ?? "Client cannot create bookings.");
 
     var intersects = await db.Bookings.AnyAsync(booking =>
+        booking.TenantId == tenantId &&
         booking.TableId == request.TableId &&
         booking.Status != BookingStatuses.Cancelled &&
         booking.Status != BookingStatuses.NoShow &&
@@ -121,7 +130,7 @@ app.MapPost("/api/bookings", async (CreateBookingRequest request, HttpContext co
     if (intersects) return HttpResults.Conflict("Booking time intersects with an existing booking.");
 
     var date = DateOnly.FromDateTime(request.StartTime.UtcDateTime);
-    var activeHolds = await GetActiveHoldsAsync(cache, request.BranchId, date, cancellationToken);
+    var activeHolds = await GetActiveHoldsAsync(cache, tenantId, request.BranchId, date, cancellationToken);
     if (request.HoldId is not null)
     {
         var hold = activeHolds.FirstOrDefault(candidate => candidate.Id == request.HoldId.Value);
@@ -134,7 +143,7 @@ app.MapPost("/api/bookings", async (CreateBookingRequest request, HttpContext co
     }
 
     var status = request.DepositAmount > 0 ? BookingStatuses.WaitingPayment : BookingStatuses.Confirmed;
-    var booking = new BookingEntity { Id = Guid.NewGuid(), ClientId = request.ClientId, BranchId = request.BranchId, TableId = request.TableId, HookahId = request.HookahId, BowlId = request.BowlId, MixId = request.MixId, StartTime = request.StartTime, EndTime = request.EndTime, GuestsCount = request.GuestsCount, Status = status, DepositAmount = request.DepositAmount, PaymentId = null, DepositPaidAt = null, Comment = request.Comment, CreatedAt = DateTimeOffset.UtcNow };
+    var booking = new BookingEntity { Id = Guid.NewGuid(), TenantId = tenantId, ClientId = request.ClientId, BranchId = request.BranchId, TableId = request.TableId, HookahId = request.HookahId, BowlId = request.BowlId, MixId = request.MixId, StartTime = request.StartTime, EndTime = request.EndTime, GuestsCount = request.GuestsCount, Status = status, DepositAmount = request.DepositAmount, PaymentId = null, DepositPaidAt = null, Comment = request.Comment, CreatedAt = DateTimeOffset.UtcNow };
     db.Bookings.Add(booking);
     var outboxEvents = new List<IIntegrationEvent>
     {
@@ -145,14 +154,15 @@ app.MapPost("/api/bookings", async (CreateBookingRequest request, HttpContext co
     await db.SaveChangesAsync(cancellationToken);
 
     await db.ForwardAndMarkOutboxAsync(events, outboxEvents, outboxMessages, cancellationToken);
-    if (request.HoldId is not null) await cache.RemoveAsync(HoldKey(request.HoldId.Value), cancellationToken);
-    await cache.RemoveAsync(AvailabilityCacheKey(request.BranchId, DateOnly.FromDateTime(request.StartTime.UtcDateTime), TimeOnly.FromDateTime(request.StartTime.UtcDateTime), request.GuestsCount), cancellationToken);
+    if (request.HoldId is not null) await cache.RemoveAsync(HoldKey(tenantId, request.HoldId.Value), cancellationToken);
+    await cache.RemoveAsync(AvailabilityCacheKey(tenantId, request.BranchId, DateOnly.FromDateTime(request.StartTime.UtcDateTime), TimeOnly.FromDateTime(request.StartTime.UtcDateTime), request.GuestsCount), cancellationToken);
     return Results.Created($"/api/bookings/{booking.Id}", booking);
 });
 
-app.MapGet("/api/bookings", async (Guid? branchId, DateOnly? date, string? status, HttpContext context, BookingDbContext db, CancellationToken cancellationToken) =>
+app.MapGet("/api/bookings", async (Guid? branchId, DateOnly? date, string? status, HttpContext context, BookingDbContext db, ITenantContext tenantContext, CancellationToken cancellationToken) =>
 {
-    var query = db.Bookings.AsNoTracking();
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var query = db.Bookings.AsNoTracking().Where(booking => booking.TenantId == tenantId);
     if (branchId is not null) query = query.Where(booking => booking.BranchId == branchId);
     if (!IsServiceRequest(context) && !HasForwardedPermission(context, PermissionCodes.BookingsManage))
     {
@@ -173,9 +183,10 @@ app.MapGet("/api/bookings", async (Guid? branchId, DateOnly? date, string? statu
     return Results.Ok(await query.OrderBy(booking => booking.StartTime).ToListAsync(cancellationToken));
 });
 
-app.MapGet("/api/bookings/{id:guid}", async (Guid id, HttpContext context, BookingDbContext db, CancellationToken cancellationToken) =>
+app.MapGet("/api/bookings/{id:guid}", async (Guid id, HttpContext context, BookingDbContext db, ITenantContext tenantContext, CancellationToken cancellationToken) =>
 {
-    var booking = await db.Bookings.AsNoTracking().FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var booking = await db.Bookings.AsNoTracking().FirstOrDefaultAsync(candidate => candidate.Id == id && candidate.TenantId == tenantId, cancellationToken);
     if (booking is null) return HttpResults.NotFound("Booking", id);
 
     if (!IsServiceRequest(context) && !HasForwardedPermission(context, PermissionCodes.BookingsManage) && GetForwardedUserId(context) != booking.ClientId)
@@ -186,9 +197,10 @@ app.MapGet("/api/bookings/{id:guid}", async (Guid id, HttpContext context, Booki
     return Results.Ok(booking);
 });
 
-app.MapPatch("/api/bookings/{id:guid}/confirm", async (Guid id, BookingDbContext db, IEventPublisher events, IDistributedCache cache, CancellationToken cancellationToken) =>
+app.MapPatch("/api/bookings/{id:guid}/confirm", async (Guid id, BookingDbContext db, ITenantContext tenantContext, IEventPublisher events, IDistributedCache cache, CancellationToken cancellationToken) =>
 {
-    var booking = await db.Bookings.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var booking = await db.Bookings.FirstOrDefaultAsync(candidate => candidate.Id == id && candidate.TenantId == tenantId, cancellationToken);
     if (booking is null) return HttpResults.NotFound("Booking", id);
     if (booking.DepositAmount > 0 && booking.DepositPaidAt is null) return HttpResults.Conflict("Booking with required deposit cannot be confirmed before payment.");
     booking.Status = BookingStatuses.Confirmed;
@@ -200,9 +212,10 @@ app.MapPatch("/api/bookings/{id:guid}/confirm", async (Guid id, BookingDbContext
     return Results.Ok(booking);
 });
 
-app.MapPatch("/api/bookings/{id:guid}/payment-succeeded", async (Guid id, BookingPaymentSucceededRequest request, BookingDbContext db, IEventPublisher events, IDistributedCache cache, CancellationToken cancellationToken) =>
+app.MapPatch("/api/bookings/{id:guid}/payment-succeeded", async (Guid id, BookingPaymentSucceededRequest request, BookingDbContext db, ITenantContext tenantContext, IEventPublisher events, IDistributedCache cache, CancellationToken cancellationToken) =>
 {
-    var booking = await db.Bookings.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var booking = await db.Bookings.FirstOrDefaultAsync(candidate => candidate.Id == id && candidate.TenantId == tenantId, cancellationToken);
     if (booking is null) return HttpResults.NotFound("Booking", id);
     if (request.Amount < booking.DepositAmount) return HttpResults.Validation("Payment amount is less than required deposit.");
     var paidAt = DateTimeOffset.UtcNow;
@@ -221,9 +234,10 @@ app.MapPatch("/api/bookings/{id:guid}/payment-succeeded", async (Guid id, Bookin
     return Results.Ok(booking);
 });
 
-app.MapPatch("/api/bookings/{id:guid}/cancel", async (Guid id, CancelBookingRequest request, BookingDbContext db, IEventPublisher events, IDistributedCache cache, CancellationToken cancellationToken) =>
+app.MapPatch("/api/bookings/{id:guid}/cancel", async (Guid id, CancelBookingRequest request, BookingDbContext db, ITenantContext tenantContext, IEventPublisher events, IDistributedCache cache, CancellationToken cancellationToken) =>
 {
-    var booking = await db.Bookings.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var booking = await db.Bookings.FirstOrDefaultAsync(candidate => candidate.Id == id && candidate.TenantId == tenantId, cancellationToken);
     if (booking is null) return HttpResults.NotFound("Booking", id);
     var reason = request.Reason?.Trim();
     if (string.IsNullOrWhiteSpace(reason)) return HttpResults.Validation("Cancellation reason is required.");
@@ -236,12 +250,21 @@ app.MapPatch("/api/bookings/{id:guid}/cancel", async (Guid id, CancelBookingRequ
     return Results.Ok(booking);
 });
 
-app.MapPatch("/api/bookings/{id:guid}/reschedule", async (Guid id, RescheduleBookingRequest request, BookingDbContext db, IDistributedCache cache, CancellationToken cancellationToken) =>
+app.MapPatch("/api/bookings/{id:guid}/reschedule", async (Guid id, RescheduleBookingRequest request, BookingDbContext db, ITenantContext tenantContext, IDistributedCache cache, CancellationToken cancellationToken) =>
 {
-    var booking = await db.Bookings.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var booking = await db.Bookings.FirstOrDefaultAsync(candidate => candidate.Id == id && candidate.TenantId == tenantId, cancellationToken);
     if (booking is null) return HttpResults.NotFound("Booking", id);
-    var previous = new BookingAvailabilityFingerprint(booking.BranchId, booking.StartTime, booking.GuestsCount);
-    var intersects = await db.Bookings.AnyAsync(existing => existing.Id != id && existing.TableId == request.TableId && existing.Status != BookingStatuses.Cancelled && existing.Status != BookingStatuses.NoShow && request.StartTime < existing.EndTime && request.EndTime > existing.StartTime, cancellationToken);
+    var previous = new BookingAvailabilityFingerprint(booking.TenantId, booking.BranchId, booking.StartTime, booking.GuestsCount);
+    var intersects = await db.Bookings.AnyAsync(existing =>
+        existing.TenantId == tenantId &&
+        existing.Id != id &&
+        existing.TableId == request.TableId &&
+        existing.Status != BookingStatuses.Cancelled &&
+        existing.Status != BookingStatuses.NoShow &&
+        request.StartTime < existing.EndTime &&
+        request.EndTime > existing.StartTime,
+        cancellationToken);
     if (intersects) return HttpResults.Conflict("Reschedule time intersects with an existing booking.");
     booking.StartTime = request.StartTime;
     booking.EndTime = request.EndTime;
@@ -252,10 +275,12 @@ app.MapPatch("/api/bookings/{id:guid}/reschedule", async (Guid id, RescheduleBoo
     return Results.Ok(booking);
 });
 
-app.MapPatch("/api/bookings/{id:guid}/no-show", async (Guid id, BookingDbContext db, IDistributedCache cache, CancellationToken cancellationToken) => await SetBookingStatusAsync(id, BookingStatuses.NoShow, db, cache, cancellationToken));
-app.MapPatch("/api/bookings/{id:guid}/client-arrived", async (Guid id, BookingDbContext db, IDistributedCache cache, CancellationToken cancellationToken) =>
+app.MapPatch("/api/bookings/{id:guid}/no-show", async (Guid id, BookingDbContext db, ITenantContext tenantContext, IDistributedCache cache, CancellationToken cancellationToken) =>
+    await SetBookingStatusAsync(id, BookingStatuses.NoShow, db, tenantContext, cache, cancellationToken));
+app.MapPatch("/api/bookings/{id:guid}/client-arrived", async (Guid id, BookingDbContext db, ITenantContext tenantContext, IDistributedCache cache, CancellationToken cancellationToken) =>
 {
-    var booking = await db.Bookings.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var booking = await db.Bookings.FirstOrDefaultAsync(candidate => candidate.Id == id && candidate.TenantId == tenantId, cancellationToken);
     if (booking is null) return HttpResults.NotFound("Booking", id);
     if (booking.Status != BookingStatuses.Confirmed) return HttpResults.Conflict("Only confirmed bookings can be marked as client arrived.");
     booking.Status = BookingStatuses.ClientArrived;
@@ -263,9 +288,10 @@ app.MapPatch("/api/bookings/{id:guid}/client-arrived", async (Guid id, BookingDb
     await InvalidateAvailabilityForBookingAsync(cache, booking, cancellationToken);
     return Results.Ok(booking);
 });
-app.MapPatch("/api/bookings/{id:guid}/complete", async (Guid id, BookingDbContext db, IDistributedCache cache, CancellationToken cancellationToken) =>
+app.MapPatch("/api/bookings/{id:guid}/complete", async (Guid id, BookingDbContext db, ITenantContext tenantContext, IDistributedCache cache, CancellationToken cancellationToken) =>
 {
-    var booking = await db.Bookings.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var booking = await db.Bookings.FirstOrDefaultAsync(candidate => candidate.Id == id && candidate.TenantId == tenantId, cancellationToken);
     if (booking is null) return HttpResults.NotFound("Booking", id);
     if (booking.Status is not BookingStatuses.ClientArrived and not BookingStatuses.Confirmed) return HttpResults.Conflict("Only confirmed or arrived bookings can be completed.");
     booking.Status = BookingStatuses.Completed;
@@ -274,10 +300,11 @@ app.MapPatch("/api/bookings/{id:guid}/complete", async (Guid id, BookingDbContex
     return Results.Ok(booking);
 });
 
-app.MapPatch("/api/bookings/mark-expired-no-shows", async (DateTimeOffset? now, BookingDbContext db, CancellationToken cancellationToken) =>
+app.MapPatch("/api/bookings/mark-expired-no-shows", async (DateTimeOffset? now, BookingDbContext db, ITenantContext tenantContext, CancellationToken cancellationToken) =>
 {
+    var tenantId = tenantContext.GetTenantIdOrDemo();
     var referenceTime = now ?? DateTimeOffset.UtcNow;
-    var expired = await db.Bookings.Where(booking => booking.Status == BookingStatuses.Confirmed && booking.StartTime.AddMinutes(20) < referenceTime).ToListAsync(cancellationToken);
+    var expired = await db.Bookings.Where(booking => booking.TenantId == tenantId && booking.Status == BookingStatuses.Confirmed && booking.StartTime.AddMinutes(20) < referenceTime).ToListAsync(cancellationToken);
     foreach (var booking in expired) booking.Status = BookingStatuses.NoShow;
     await db.SaveChangesAsync(cancellationToken);
     return Results.Ok(expired);
@@ -285,9 +312,10 @@ app.MapPatch("/api/bookings/mark-expired-no-shows", async (DateTimeOffset? now, 
 
 app.Run();
 
-static async Task<IResult> SetBookingStatusAsync(Guid id, string status, BookingDbContext db, IDistributedCache cache, CancellationToken cancellationToken)
+static async Task<IResult> SetBookingStatusAsync(Guid id, string status, BookingDbContext db, ITenantContext tenantContext, IDistributedCache cache, CancellationToken cancellationToken)
 {
-    var booking = await db.Bookings.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var booking = await db.Bookings.FirstOrDefaultAsync(candidate => candidate.Id == id && candidate.TenantId == tenantId, cancellationToken);
     if (booking is null) return HttpResults.NotFound("Booking", id);
     booking.Status = status;
     await db.SaveChangesAsync(cancellationToken);
@@ -340,32 +368,32 @@ static IReadOnlyDictionary<(Guid BranchId, DayOfWeek DayOfWeek), BranchWorkingHo
         item => item);
 }
 
-static string AvailabilityCacheKey(Guid branchId, DateOnly date, TimeOnly time, int guestsCount) => $"booking:availability:{branchId}:{date:yyyyMMdd}:{time:HHmm}:{guestsCount}";
-static string HoldKey(Guid holdId) => $"booking:hold:{holdId}";
-static string HoldIndexKey(Guid branchId, DateOnly date) => $"booking:holds:{branchId}:{date:yyyyMMdd}";
+static string AvailabilityCacheKey(Guid tenantId, Guid branchId, DateOnly date, TimeOnly time, int guestsCount) => $"tenant:{tenantId}:booking:availability:{branchId}:{date:yyyyMMdd}:{time:HHmm}:{guestsCount}";
+static string HoldKey(Guid tenantId, Guid holdId) => $"tenant:{tenantId}:booking:hold:{holdId}";
+static string HoldIndexKey(Guid tenantId, Guid branchId, DateOnly date) => $"tenant:{tenantId}:booking:holds:{branchId}:{date:yyyyMMdd}";
 
 static async Task StoreHoldAsync(IDistributedCache cache, BookingHold hold, CancellationToken cancellationToken)
 {
     var ttl = hold.ExpiresAt - DateTimeOffset.UtcNow;
     if (ttl <= TimeSpan.Zero) return;
 
-    await cache.SetJsonAsync(HoldKey(hold.Id), hold, ttl, cancellationToken);
+    await cache.SetJsonAsync(HoldKey(hold.TenantId, hold.Id), hold, ttl, cancellationToken);
     var date = DateOnly.FromDateTime(hold.StartTime.UtcDateTime);
-    var indexKey = HoldIndexKey(hold.BranchId, date);
+    var indexKey = HoldIndexKey(hold.TenantId, hold.BranchId, date);
     var ids = await cache.GetJsonAsync<Guid[]>(indexKey, cancellationToken) ?? [];
     var nextIds = ids.Append(hold.Id).Distinct().ToArray();
     await cache.SetJsonAsync(indexKey, nextIds, TimeSpan.FromDays(1), cancellationToken);
 }
 
-static async Task<IReadOnlyCollection<BookingHold>> GetActiveHoldsAsync(IDistributedCache cache, Guid branchId, DateOnly date, CancellationToken cancellationToken)
+static async Task<IReadOnlyCollection<BookingHold>> GetActiveHoldsAsync(IDistributedCache cache, Guid tenantId, Guid branchId, DateOnly date, CancellationToken cancellationToken)
 {
-    var ids = await cache.GetJsonAsync<Guid[]>(HoldIndexKey(branchId, date), cancellationToken) ?? [];
+    var ids = await cache.GetJsonAsync<Guid[]>(HoldIndexKey(tenantId, branchId, date), cancellationToken) ?? [];
     var now = DateTimeOffset.UtcNow;
     var holds = new List<BookingHold>();
     foreach (var id in ids)
     {
-        var hold = await cache.GetJsonAsync<BookingHold>(HoldKey(id), cancellationToken);
-        if (hold is null || hold.ExpiresAt <= now) continue;
+        var hold = await cache.GetJsonAsync<BookingHold>(HoldKey(tenantId, id), cancellationToken);
+        if (hold is null || hold.ExpiresAt <= now || hold.TenantId != tenantId) continue;
         holds.Add(hold);
     }
     return holds;
@@ -373,13 +401,13 @@ static async Task<IReadOnlyCollection<BookingHold>> GetActiveHoldsAsync(IDistrib
 
 static Task InvalidateAvailabilityForBookingAsync(IDistributedCache cache, BookingEntity booking, CancellationToken cancellationToken)
 {
-    return InvalidateAvailabilityAsync(cache, new BookingAvailabilityFingerprint(booking.BranchId, booking.StartTime, booking.GuestsCount), cancellationToken);
+    return InvalidateAvailabilityAsync(cache, new BookingAvailabilityFingerprint(booking.TenantId, booking.BranchId, booking.StartTime, booking.GuestsCount), cancellationToken);
 }
 
 static Task InvalidateAvailabilityAsync(IDistributedCache cache, BookingAvailabilityFingerprint fingerprint, CancellationToken cancellationToken)
 {
     return cache.RemoveAsync(
-        AvailabilityCacheKey(fingerprint.BranchId, DateOnly.FromDateTime(fingerprint.StartTime.UtcDateTime), TimeOnly.FromDateTime(fingerprint.StartTime.UtcDateTime), fingerprint.GuestsCount),
+        AvailabilityCacheKey(fingerprint.TenantId, fingerprint.BranchId, DateOnly.FromDateTime(fingerprint.StartTime.UtcDateTime), TimeOnly.FromDateTime(fingerprint.StartTime.UtcDateTime), fingerprint.GuestsCount),
         cancellationToken);
 }
 
@@ -427,8 +455,8 @@ public sealed record TableDto(Guid Id, Guid HallId, Guid? ZoneId, string Name, i
 public sealed record BranchWorkingHoursDto(Guid BranchId, int DayOfWeek, TimeOnly OpensAt, TimeOnly ClosesAt, bool IsClosed);
 public sealed record CreateBookingRequest(Guid BranchId, Guid TableId, Guid ClientId, DateTimeOffset StartTime, DateTimeOffset EndTime, int GuestsCount, Guid? HookahId, Guid? BowlId, Guid? MixId, string? Comment, decimal DepositAmount, Guid? HoldId = null);
 public sealed record CreateBookingHoldRequest(Guid BranchId, Guid TableId, Guid ClientId, DateTimeOffset StartTime, DateTimeOffset EndTime, int GuestsCount);
-public sealed record BookingHold(Guid Id, Guid BranchId, Guid TableId, Guid ClientId, DateTimeOffset StartTime, DateTimeOffset EndTime, int GuestsCount, DateTimeOffset CreatedAt, DateTimeOffset ExpiresAt);
-public sealed record BookingAvailabilityFingerprint(Guid BranchId, DateTimeOffset StartTime, int GuestsCount);
+public sealed record BookingHold(Guid Id, Guid TenantId, Guid BranchId, Guid TableId, Guid ClientId, DateTimeOffset StartTime, DateTimeOffset EndTime, int GuestsCount, DateTimeOffset CreatedAt, DateTimeOffset ExpiresAt);
+public sealed record BookingAvailabilityFingerprint(Guid TenantId, Guid BranchId, DateTimeOffset StartTime, int GuestsCount);
 public sealed record BookingPaymentSucceededRequest(Guid PaymentId, decimal Amount);
 public sealed record CancelBookingRequest(string Reason);
 public sealed record RescheduleBookingRequest(DateTimeOffset StartTime, DateTimeOffset EndTime, Guid TableId);
