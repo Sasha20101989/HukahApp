@@ -18,6 +18,7 @@ public sealed class UserDbContext(DbContextOptions<UserDbContext> options) : DbC
         {
             entity.ToTable("users");
             entity.HasKey(user => user.Id);
+            entity.Property(user => user.TenantId).HasColumnName("tenant_id");
             entity.Property(user => user.RoleId).HasColumnName("role_id");
             entity.Property(user => user.BranchId).HasColumnName("branch_id");
             entity.Property(user => user.PasswordHash).HasColumnName("password_hash");
@@ -37,6 +38,7 @@ public sealed class UserDbContext(DbContextOptions<UserDbContext> options) : DbC
         {
             entity.ToTable("staff_shifts");
             entity.HasKey(shift => shift.Id);
+            entity.Property(shift => shift.TenantId).HasColumnName("tenant_id");
             entity.Property(shift => shift.StaffId).HasColumnName("staff_id");
             entity.Property(shift => shift.BranchId).HasColumnName("branch_id");
             entity.Property(shift => shift.StartsAt).HasColumnName("starts_at");
@@ -52,6 +54,7 @@ public sealed class UserDbContext(DbContextOptions<UserDbContext> options) : DbC
 public sealed class UserEntity
 {
     public Guid Id { get; set; }
+    public Guid TenantId { get; set; }
     public Guid RoleId { get; set; }
     public Guid? BranchId { get; set; }
     public string Name { get; set; } = string.Empty;
@@ -69,6 +72,7 @@ public sealed class RolePermissionEntity { public Guid RoleId { get; set; } publ
 public sealed class StaffShiftEntity
 {
     public Guid Id { get; set; }
+    public Guid TenantId { get; set; }
     public Guid StaffId { get; set; }
     public Guid BranchId { get; set; }
     public DateTimeOffset StartsAt { get; set; }

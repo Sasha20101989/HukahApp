@@ -1,6 +1,7 @@
 using HookahPlatform.BuildingBlocks;
 using HookahPlatform.BuildingBlocks.Persistence;
 using HookahPlatform.BuildingBlocks.Security;
+using HookahPlatform.BuildingBlocks.Tenancy;
 using HookahPlatform.Contracts;
 using HookahPlatform.UserService.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -18,7 +19,7 @@ var rolePermissions = RolePermissionCatalog.Roles.ToDictionary(
     role => role.Permissions.ToHashSet(StringComparer.OrdinalIgnoreCase),
     StringComparer.OrdinalIgnoreCase);
 
-app.MapGet("/api/users/me", async (HttpContext context, UserDbContext db, CancellationToken cancellationToken) =>
+app.MapGet("/api/users/me", async (HttpContext context, UserDbContext db, ITenantContext tenantContext, CancellationToken cancellationToken) =>
 {
     var currentUserId = GetForwardedUserId(context);
     if (currentUserId is null)
@@ -27,14 +28,16 @@ app.MapGet("/api/users/me", async (HttpContext context, UserDbContext db, Cancel
     }
 
     var roles = await LoadRolesAsync(db, cancellationToken);
-    var user = await db.Users.AsNoTracking().FirstOrDefaultAsync(candidate => candidate.Id == currentUserId.Value, cancellationToken);
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var user = await db.Users.AsNoTracking().FirstOrDefaultAsync(candidate => candidate.Id == currentUserId.Value && candidate.TenantId == tenantId, cancellationToken);
     return user is null ? HttpResults.NotFound("User", currentUserId.Value) : Results.Ok(ToProfile(user, roles));
 });
 
-app.MapGet("/api/users", async (string? role, Guid? branchId, string? status, HttpContext context, UserDbContext db, CancellationToken cancellationToken) =>
+app.MapGet("/api/users", async (string? role, Guid? branchId, string? status, HttpContext context, UserDbContext db, ITenantContext tenantContext, CancellationToken cancellationToken) =>
 {
     var roles = await LoadRolesAsync(db, cancellationToken);
-    var query = db.Users.AsNoTracking();
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var query = db.Users.AsNoTracking().Where(user => user.TenantId == tenantId);
     var roleCode = string.IsNullOrWhiteSpace(role) ? null : ResolveRoleCode(role);
     var canManageStaff = IsServiceRequest(context) || HasForwardedPermission(context, PermissionCodes.StaffManage);
 
@@ -77,15 +80,16 @@ app.MapGet("/api/roles", () => Results.Ok(RolePermissionCatalog.Roles.Select(rol
 
 app.MapGet("/api/permissions", () => Results.Ok(RolePermissionCatalog.Permissions.OrderBy(permission => permission.Code)));
 
-app.MapGet("/api/users/{id:guid}/permissions", async (Guid id, HttpContext context, UserDbContext db, CancellationToken cancellationToken) =>
+app.MapGet("/api/users/{id:guid}/permissions", async (Guid id, HttpContext context, UserDbContext db, ITenantContext tenantContext, CancellationToken cancellationToken) =>
 {
     if (!IsServiceRequest(context) && GetForwardedUserId(context) != id && !HasForwardedPermission(context, PermissionCodes.StaffManage))
     {
         return Results.Json(new ProblemDetailsDto("forbidden", "User permissions can only be read by the same user or staff managers."), statusCode: StatusCodes.Status403Forbidden);
     }
 
+    var tenantId = tenantContext.GetTenantIdOrDemo();
     var roles = await LoadRolesAsync(db, cancellationToken);
-    var user = await db.Users.AsNoTracking().FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    var user = await db.Users.AsNoTracking().FirstOrDefaultAsync(candidate => candidate.Id == id && candidate.TenantId == tenantId, cancellationToken);
     if (user is null)
     {
         return HttpResults.NotFound("User", id);
@@ -119,7 +123,7 @@ app.MapPatch("/api/roles/{code}/permissions", (string code, UpdateRolePermission
     return Results.Ok(new RoleView(role.Name, role.Code, rolePermissions[roleCode].OrderBy(permission => permission)));
 });
 
-app.MapPost("/api/users/staff", async (CreateStaffRequest request, UserDbContext db, CancellationToken cancellationToken) =>
+app.MapPost("/api/users/staff", async (CreateStaffRequest request, UserDbContext db, ITenantContext tenantContext, CancellationToken cancellationToken) =>
 {
     if (string.IsNullOrWhiteSpace(request.Name) || string.IsNullOrWhiteSpace(request.Phone))
     {
@@ -137,10 +141,12 @@ app.MapPost("/api/users/staff", async (CreateStaffRequest request, UserDbContext
         return HttpResults.Conflict("User with this phone already exists.");
     }
 
+    var tenantId = tenantContext.GetTenantIdOrDemo();
     var role = await db.Roles.AsNoTracking().FirstAsync(candidate => candidate.Code == roleCode, cancellationToken);
     var user = new UserEntity
     {
         Id = Guid.NewGuid(),
+        TenantId = tenantId,
         Name = request.Name,
         Phone = request.Phone,
         Email = null,
@@ -158,10 +164,11 @@ app.MapPost("/api/users/staff", async (CreateStaffRequest request, UserDbContext
     return Results.Created($"/api/users/{user.Id}", ToProfile(user, roles));
 });
 
-app.MapPost("/api/users/clients", async (CreateClientProfileRequest request, UserDbContext db, CancellationToken cancellationToken) =>
+app.MapPost("/api/users/clients", async (CreateClientProfileRequest request, UserDbContext db, ITenantContext tenantContext, CancellationToken cancellationToken) =>
 {
     var roles = await LoadRolesAsync(db, cancellationToken);
-    var existing = await db.Users.AsNoTracking().FirstOrDefaultAsync(user => user.Id == request.UserId, cancellationToken);
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var existing = await db.Users.AsNoTracking().FirstOrDefaultAsync(user => user.Id == request.UserId && user.TenantId == tenantId, cancellationToken);
     if (existing is not null)
     {
         return Results.Ok(ToProfile(existing, roles));
@@ -171,6 +178,7 @@ app.MapPost("/api/users/clients", async (CreateClientProfileRequest request, Use
     var user = new UserEntity
     {
         Id = request.UserId,
+        TenantId = tenantId,
         Name = request.Name,
         Phone = request.Phone,
         Email = request.Email,
@@ -187,7 +195,7 @@ app.MapPost("/api/users/clients", async (CreateClientProfileRequest request, Use
     return Results.Created($"/api/users/{user.Id}", ToProfile(user, roles));
 });
 
-app.MapPatch("/api/users/{id:guid}", async (Guid id, UpdateUserRequest request, HttpContext context, UserDbContext db, CancellationToken cancellationToken) =>
+app.MapPatch("/api/users/{id:guid}", async (Guid id, UpdateUserRequest request, HttpContext context, UserDbContext db, ITenantContext tenantContext, CancellationToken cancellationToken) =>
 {
     var canManageUsers = IsServiceRequest(context) || HasForwardedPermission(context, PermissionCodes.StaffManage);
     if (!canManageUsers && GetForwardedUserId(context) != id)
@@ -200,7 +208,8 @@ app.MapPatch("/api/users/{id:guid}", async (Guid id, UpdateUserRequest request, 
         return HttpResults.Validation("Client profile update can only change name and email.");
     }
 
-    var user = await db.Users.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var user = await db.Users.FirstOrDefaultAsync(candidate => candidate.Id == id && candidate.TenantId == tenantId, cancellationToken);
     if (user is null)
     {
         return HttpResults.NotFound("User", id);
@@ -217,7 +226,7 @@ app.MapPatch("/api/users/{id:guid}", async (Guid id, UpdateUserRequest request, 
     return Results.Ok(ToProfile(user, roles));
 });
 
-app.MapGet("/api/users/{id:guid}/booking-eligibility", async (Guid id, HttpContext context, UserDbContext db, CancellationToken cancellationToken) =>
+app.MapGet("/api/users/{id:guid}/booking-eligibility", async (Guid id, HttpContext context, UserDbContext db, ITenantContext tenantContext, CancellationToken cancellationToken) =>
 {
     if (!IsServiceRequest(context) &&
         GetForwardedUserId(context) != id &&
@@ -227,7 +236,8 @@ app.MapGet("/api/users/{id:guid}/booking-eligibility", async (Guid id, HttpConte
         return Results.Json(new ProblemDetailsDto("forbidden", "Booking eligibility can only be read by the same user or booking/staff managers."), statusCode: StatusCodes.Status403Forbidden);
     }
 
-    var user = await db.Users.AsNoTracking().FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var user = await db.Users.AsNoTracking().FirstOrDefaultAsync(candidate => candidate.Id == id && candidate.TenantId == tenantId, cancellationToken);
     if (user is null)
     {
         return HttpResults.NotFound("User", id);
@@ -237,9 +247,10 @@ app.MapGet("/api/users/{id:guid}/booking-eligibility", async (Guid id, HttpConte
     return Results.Ok(new BookingEligibility(user.Id, isEligible, isEligible ? null : "Client is blocked or inactive."));
 });
 
-app.MapDelete("/api/users/{id:guid}", async (Guid id, UserDbContext db, CancellationToken cancellationToken) =>
+app.MapDelete("/api/users/{id:guid}", async (Guid id, UserDbContext db, ITenantContext tenantContext, CancellationToken cancellationToken) =>
 {
-    var user = await db.Users.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var user = await db.Users.FirstOrDefaultAsync(candidate => candidate.Id == id && candidate.TenantId == tenantId, cancellationToken);
     if (user is null)
     {
         return HttpResults.NotFound("User", id);
@@ -251,9 +262,10 @@ app.MapDelete("/api/users/{id:guid}", async (Guid id, UserDbContext db, Cancella
     return Results.NoContent();
 });
 
-app.MapGet("/api/staff/shifts", async (Guid? branchId, Guid? staffId, DateOnly? from, DateOnly? to, string? status, UserDbContext db, CancellationToken cancellationToken) =>
+app.MapGet("/api/staff/shifts", async (Guid? branchId, Guid? staffId, DateOnly? from, DateOnly? to, string? status, UserDbContext db, ITenantContext tenantContext, CancellationToken cancellationToken) =>
 {
-    var query = db.StaffShifts.AsNoTracking();
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var query = db.StaffShifts.AsNoTracking().Where(shift => shift.TenantId == tenantId);
     if (branchId is not null) query = query.Where(shift => shift.BranchId == branchId);
     if (staffId is not null) query = query.Where(shift => shift.StaffId == staffId);
     if (from is not null) query = query.Where(shift => DateOnly.FromDateTime(shift.StartsAt.UtcDateTime) >= from);
@@ -263,14 +275,16 @@ app.MapGet("/api/staff/shifts", async (Guid? branchId, Guid? staffId, DateOnly? 
     return Results.Ok(await query.OrderBy(shift => shift.StartsAt).ToListAsync(cancellationToken));
 });
 
-app.MapPost("/api/staff/shifts", async (CreateStaffShiftRequest request, UserDbContext db, CancellationToken cancellationToken) =>
+app.MapPost("/api/staff/shifts", async (CreateStaffShiftRequest request, UserDbContext db, ITenantContext tenantContext, CancellationToken cancellationToken) =>
 {
-    var staff = await db.Users.AsNoTracking().FirstOrDefaultAsync(user => user.Id == request.StaffId, cancellationToken);
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var staff = await db.Users.AsNoTracking().FirstOrDefaultAsync(user => user.Id == request.StaffId && user.TenantId == tenantId, cancellationToken);
     if (staff is null) return HttpResults.NotFound("User", request.StaffId);
     if (staff.BranchId != request.BranchId) return HttpResults.Validation("Staff member must be assigned to the shift branch.");
     if (request.StartsAt >= request.EndsAt) return HttpResults.Validation("Shift startsAt must be earlier than endsAt.");
 
     var intersects = await db.StaffShifts.AnyAsync(shift =>
+        shift.TenantId == tenantId &&
         shift.StaffId == request.StaffId &&
         shift.Status != "CANCELLED" &&
         request.StartsAt < shift.EndsAt &&
@@ -278,15 +292,16 @@ app.MapPost("/api/staff/shifts", async (CreateStaffShiftRequest request, UserDbC
         cancellationToken);
     if (intersects) return HttpResults.Conflict("Staff shift intersects with an existing shift.");
 
-    var created = new StaffShiftEntity { Id = Guid.NewGuid(), StaffId = request.StaffId, BranchId = request.BranchId, StartsAt = request.StartsAt, EndsAt = request.EndsAt, Status = "PLANNED", ActualStartedAt = null, ActualFinishedAt = null, RoleOnShift = request.RoleOnShift };
+    var created = new StaffShiftEntity { Id = Guid.NewGuid(), TenantId = tenantId, StaffId = request.StaffId, BranchId = request.BranchId, StartsAt = request.StartsAt, EndsAt = request.EndsAt, Status = "PLANNED", ActualStartedAt = null, ActualFinishedAt = null, RoleOnShift = request.RoleOnShift };
     db.StaffShifts.Add(created);
     await db.SaveChangesAsync(cancellationToken);
     return Results.Created($"/api/staff/shifts/{created.Id}", created);
 });
 
-app.MapPatch("/api/staff/shifts/{id:guid}/start", async (Guid id, UserDbContext db, CancellationToken cancellationToken) =>
+app.MapPatch("/api/staff/shifts/{id:guid}/start", async (Guid id, UserDbContext db, ITenantContext tenantContext, CancellationToken cancellationToken) =>
 {
-    var shift = await db.StaffShifts.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var shift = await db.StaffShifts.FirstOrDefaultAsync(candidate => candidate.Id == id && candidate.TenantId == tenantId, cancellationToken);
     if (shift is null) return HttpResults.NotFound("StaffShift", id);
     shift.Status = "ACTIVE";
     shift.ActualStartedAt = DateTimeOffset.UtcNow;
@@ -294,9 +309,10 @@ app.MapPatch("/api/staff/shifts/{id:guid}/start", async (Guid id, UserDbContext 
     return Results.Ok(shift);
 });
 
-app.MapPatch("/api/staff/shifts/{id:guid}/finish", async (Guid id, UserDbContext db, CancellationToken cancellationToken) =>
+app.MapPatch("/api/staff/shifts/{id:guid}/finish", async (Guid id, UserDbContext db, ITenantContext tenantContext, CancellationToken cancellationToken) =>
 {
-    var shift = await db.StaffShifts.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var shift = await db.StaffShifts.FirstOrDefaultAsync(candidate => candidate.Id == id && candidate.TenantId == tenantId, cancellationToken);
     if (shift is null) return HttpResults.NotFound("StaffShift", id);
     shift.Status = "COMPLETED";
     shift.ActualFinishedAt = DateTimeOffset.UtcNow;
@@ -304,9 +320,10 @@ app.MapPatch("/api/staff/shifts/{id:guid}/finish", async (Guid id, UserDbContext
     return Results.Ok(shift);
 });
 
-app.MapPatch("/api/staff/shifts/{id:guid}/cancel", async (Guid id, CancelStaffShiftRequest request, UserDbContext db, CancellationToken cancellationToken) =>
+app.MapPatch("/api/staff/shifts/{id:guid}/cancel", async (Guid id, CancelStaffShiftRequest request, UserDbContext db, ITenantContext tenantContext, CancellationToken cancellationToken) =>
 {
-    var shift = await db.StaffShifts.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var shift = await db.StaffShifts.FirstOrDefaultAsync(candidate => candidate.Id == id && candidate.TenantId == tenantId, cancellationToken);
     if (shift is null) return HttpResults.NotFound("StaffShift", id);
     var reason = request.Reason?.Trim();
     if (string.IsNullOrWhiteSpace(reason)) return HttpResults.Validation("Cancellation reason is required.");
