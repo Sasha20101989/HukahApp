@@ -207,6 +207,8 @@ app.MapDelete("/api/orders/{id:guid}", async (Guid id, CancelOrderRequest reques
 {
     var order = await db.Orders.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
     if (order is null) return HttpResults.NotFound("Order", id);
+    var reason = request.Reason?.Trim();
+    if (string.IsNullOrWhiteSpace(reason)) return HttpResults.Validation("Cancellation reason is required.");
     if (!CanTransition(order.Status, OrderStatuses.Cancelled, allowedOrderTransitions)) return HttpResults.Conflict($"Order status cannot transition from {order.Status} to {OrderStatuses.Cancelled}.");
     var items = await db.OrderItems.AsNoTracking().Where(item => item.OrderId == id).ToListAsync(cancellationToken);
     order.Status = OrderStatuses.Cancelled;
@@ -218,7 +220,7 @@ app.MapDelete("/api/orders/{id:guid}", async (Guid id, CancelOrderRequest reques
     var item = items.First();
     await ReleaseResourcesAsync(order.TableId, item.HookahId, httpClientFactory, configuration, cancellationToken);
     await db.ForwardAndMarkOutboxAsync(events, cancelled, outboxMessage, cancellationToken);
-    return Results.Ok(new { id, status = OrderStatuses.Cancelled, request.Reason });
+    return Results.Ok(new { id, status = OrderStatuses.Cancelled, Reason = reason });
 });
 
 app.Run();

@@ -61,6 +61,25 @@ The API Gateway is the public entrypoint at `http://localhost:8080`. Service con
 
 Use [docs/smoke-tests.http](docs/smoke-tests.http) after starting Docker Compose. Requests are written against the gateway.
 
+For automated CRUD coverage against a running local gateway:
+
+```bash
+corepack pnpm api:crud-smoke
+```
+
+The script logs in as the seeded owner by default, registers an isolated smoke client when `SMOKE_CLIENT_ID` is not provided, creates isolated `SMOKE-*` resources, verifies create/update/delete or deactivate flows, and then cleans up. Override `API_URL`, `SMOKE_OWNER_PHONE`, `SMOKE_OWNER_PASSWORD`, `SMOKE_CLIENT_ID` or `SMOKE_TIMEOUT_MS` when needed.
+
+## Frontend Smoke Tests
+
+After `corepack pnpm local:up` or after starting both frontend dev servers:
+
+```bash
+corepack pnpm frontend:smoke
+corepack pnpm frontend:browser-smoke
+```
+
+`frontend:smoke` performs HTTP checks for CRM/client pages, route guards, manifests and payment return pages. `frontend:browser-smoke` renders the same critical paths in headless Chrome/Chromium. Set `CRM_URL`, `CLIENT_URL`, `CHROME_BIN` or `SMOKE_TIMEOUT_MS` when ports or browser path differ.
+
 ## Observability
 
 Backend services emit structured Serilog logs plus OpenTelemetry traces/metrics through the local collector. See [docs/observability.md](docs/observability.md).

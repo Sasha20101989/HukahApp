@@ -65,11 +65,16 @@ app.MapPost("/api/inventory/check", async (InventoryAvailabilityRequest request,
 
 app.MapPost("/api/inventory/in", async (InventoryInRequest request, InventoryDbContext db, IEventPublisher events, CancellationToken cancellationToken) =>
 {
+    if (request.BranchId == Guid.Empty || request.TobaccoId == Guid.Empty) return HttpResults.Validation("Branch and tobacco are required.");
+    if (request.AmountGrams <= 0) return HttpResults.Validation("Incoming amount must be positive.");
+    if (request.CostPerGram < 0) return HttpResults.Validation("Cost per gram cannot be negative.");
+
     var item = await GetOrCreateItemAsync(db, request.BranchId, request.TobaccoId, cancellationToken);
     item.StockGrams += request.AmountGrams;
     item.UpdatedAt = DateTimeOffset.UtcNow;
 
-    db.InventoryMovements.Add(new InventoryMovementEntity { Id = Guid.NewGuid(), BranchId = request.BranchId, TobaccoId = request.TobaccoId, Type = "IN", AmountGrams = request.AmountGrams, Reason = request.Comment ?? $"Supplier: {request.Supplier}", OrderId = null, CreatedBy = null, CreatedAt = DateTimeOffset.UtcNow });
+    var reason = !string.IsNullOrWhiteSpace(request.Comment) ? request.Comment.Trim() : !string.IsNullOrWhiteSpace(request.Supplier) ? $"Supplier: {request.Supplier.Trim()}" : "Inventory receipt";
+    db.InventoryMovements.Add(new InventoryMovementEntity { Id = Guid.NewGuid(), BranchId = request.BranchId, TobaccoId = request.TobaccoId, Type = "IN", AmountGrams = request.AmountGrams, Reason = reason, OrderId = null, CreatedBy = null, CreatedAt = DateTimeOffset.UtcNow });
     var outboxEvents = BuildLowStockEvents(item);
     var outboxMessages = db.AddOutboxMessages(outboxEvents);
     await db.SaveChangesAsync(cancellationToken);
@@ -80,6 +85,11 @@ app.MapPost("/api/inventory/in", async (InventoryInRequest request, InventoryDbC
 
 app.MapPost("/api/inventory/out", async (InventoryOutRequest request, InventoryDbContext db, IEventPublisher events, CancellationToken cancellationToken) =>
 {
+    if (request.BranchId == Guid.Empty || request.TobaccoId == Guid.Empty) return HttpResults.Validation("Branch and tobacco are required.");
+    if (request.AmountGrams <= 0) return HttpResults.Validation("Write-off amount must be positive.");
+    var reason = request.Reason?.Trim();
+    if (string.IsNullOrWhiteSpace(reason)) return HttpResults.Validation("Write-off reason is required.");
+
     var item = await GetOrCreateItemAsync(db, request.BranchId, request.TobaccoId, cancellationToken);
     if (item.StockGrams < request.AmountGrams)
     {
@@ -89,7 +99,7 @@ app.MapPost("/api/inventory/out", async (InventoryOutRequest request, InventoryD
     item.StockGrams -= request.AmountGrams;
     item.UpdatedAt = DateTimeOffset.UtcNow;
 
-    db.InventoryMovements.Add(new InventoryMovementEntity { Id = Guid.NewGuid(), BranchId = request.BranchId, TobaccoId = request.TobaccoId, Type = "OUT", AmountGrams = request.AmountGrams, Reason = request.Reason, OrderId = request.OrderId, CreatedBy = request.CreatedBy, CreatedAt = DateTimeOffset.UtcNow });
+    db.InventoryMovements.Add(new InventoryMovementEntity { Id = Guid.NewGuid(), BranchId = request.BranchId, TobaccoId = request.TobaccoId, Type = "OUT", AmountGrams = request.AmountGrams, Reason = reason, OrderId = request.OrderId, CreatedBy = request.CreatedBy, CreatedAt = DateTimeOffset.UtcNow });
     var outboxEvents = new List<IIntegrationEvent>
     {
         new InventoryWrittenOff(request.BranchId, request.TobaccoId, request.OrderId, request.AmountGrams, DateTimeOffset.UtcNow)
@@ -104,12 +114,35 @@ app.MapPost("/api/inventory/out", async (InventoryOutRequest request, InventoryD
 
 app.MapPost("/api/inventory/adjustment", async (InventoryAdjustmentRequest request, InventoryDbContext db, IEventPublisher events, CancellationToken cancellationToken) =>
 {
+    if (request.BranchId == Guid.Empty || request.TobaccoId == Guid.Empty) return HttpResults.Validation("Branch and tobacco are required.");
+    if (request.NewStockGrams < 0) return HttpResults.Validation("New stock amount cannot be negative.");
+
     var item = await GetOrCreateItemAsync(db, request.BranchId, request.TobaccoId, cancellationToken);
     var delta = request.NewStockGrams - item.StockGrams;
     item.StockGrams = request.NewStockGrams;
     item.UpdatedAt = DateTimeOffset.UtcNow;
 
     db.InventoryMovements.Add(new InventoryMovementEntity { Id = Guid.NewGuid(), BranchId = request.BranchId, TobaccoId = request.TobaccoId, Type = "ADJUSTMENT", AmountGrams = delta, Reason = "Manual adjustment", OrderId = null, CreatedBy = request.CreatedBy, CreatedAt = DateTimeOffset.UtcNow });
+    var outboxEvents = BuildLowStockEvents(item);
+    var outboxMessages = db.AddOutboxMessages(outboxEvents);
+    await db.SaveChangesAsync(cancellationToken);
+    await db.ForwardAndMarkOutboxAsync(events, outboxEvents, outboxMessages, cancellationToken);
+
+    return Results.Ok(item);
+});
+
+app.MapPatch("/api/inventory/{id:guid}", async (Guid id, UpdateInventoryItemRequest request, InventoryDbContext db, IEventPublisher events, CancellationToken cancellationToken) =>
+{
+    var item = await db.InventoryItems.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    if (item is null) return HttpResults.NotFound("Inventory item", id);
+    if (request.MinStockGrams is not null && request.MinStockGrams < 0) return HttpResults.Validation("Minimum stock cannot be negative.");
+
+    if (request.MinStockGrams is not null)
+    {
+        item.MinStockGrams = request.MinStockGrams.Value;
+    }
+
+    item.UpdatedAt = DateTimeOffset.UtcNow;
     var outboxEvents = BuildLowStockEvents(item);
     var outboxMessages = db.AddOutboxMessages(outboxEvents);
     await db.SaveChangesAsync(cancellationToken);
@@ -321,5 +354,6 @@ public sealed record InventoryAvailabilityItem(Guid TobaccoId, decimal RequiredG
 public sealed record InventoryInRequest(Guid BranchId, Guid TobaccoId, decimal AmountGrams, decimal CostPerGram, string? Supplier, string? Comment);
 public sealed record InventoryOutRequest(Guid BranchId, Guid TobaccoId, decimal AmountGrams, string Reason, Guid? OrderId, Guid? CreatedBy);
 public sealed record InventoryAdjustmentRequest(Guid BranchId, Guid TobaccoId, decimal NewStockGrams, Guid? CreatedBy);
+public sealed record UpdateInventoryItemRequest(decimal? MinStockGrams);
 public sealed record MixDto(Guid Id, Guid BowlId, IReadOnlyCollection<MixItemDto> Items);
 public sealed record MixItemDto(Guid Id, Guid TobaccoId, decimal Percent, decimal Grams);

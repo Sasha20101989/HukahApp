@@ -35,8 +35,11 @@ app.MapGet("/api/analytics/dashboard", async (Guid? branchId, DateOnly from, Dat
     return Results.Ok(new DashboardMetrics(revenue, scopedOrders.Count, averageCheck, scopedBookings.Count, noShowRate, from, to, branchId));
 });
 
-app.MapGet("/api/analytics/top-mixes", async (AnalyticsDbContext db, CancellationToken cancellationToken) =>
-    Results.Ok(await db.Orders.AsNoTracking().GroupBy(order => order.MixId).Select(group => new TopMix(group.Key, $"Mix {group.Key.ToString().Substring(0, 8)}", group.Count(), 0)).OrderByDescending(metric => metric.OrdersCount).Take(20).ToListAsync(cancellationToken)));
+app.MapGet("/api/analytics/top-mixes", async (Guid? branchId, DateOnly? from, DateOnly? to, AnalyticsDbContext db, CancellationToken cancellationToken) =>
+{
+    var query = AnalyticsQueries.FilterOrders(db.Orders.AsNoTracking(), branchId, from, to);
+    return Results.Ok(await query.GroupBy(order => order.MixId).Select(group => new TopMix(group.Key, $"Mix {group.Key.ToString().Substring(0, 8)}", group.Count(), 0, group.Sum(order => order.TotalPrice))).OrderByDescending(metric => metric.OrdersCount).Take(20).ToListAsync(cancellationToken));
+});
 
 app.MapGet("/api/analytics/tobacco-usage", async (Guid? branchId, AnalyticsDbContext db, CancellationToken cancellationToken) =>
 {
@@ -45,13 +48,15 @@ app.MapGet("/api/analytics/tobacco-usage", async (Guid? branchId, AnalyticsDbCon
     return Results.Ok(await query.OrderByDescending(item => item.Grams).Select(item => new TobaccoUsage(item.BranchId, item.TobaccoId, item.Grams)).ToListAsync(cancellationToken));
 });
 
-app.MapGet("/api/analytics/staff-performance", async (AnalyticsDbContext db, CancellationToken cancellationToken) =>
-    Results.Ok(await db.Orders.AsNoTracking().Where(order => order.HookahMasterId != null).GroupBy(order => order.HookahMasterId!.Value).Select(group => new StaffPerformance(group.Key, $"Staff {group.Key.ToString().Substring(0, 8)}", group.Count(), 0, TimeSpan.Zero)).OrderByDescending(metric => metric.OrdersServed).ToListAsync(cancellationToken)));
-
-app.MapGet("/api/analytics/table-load", async (Guid? branchId, AnalyticsDbContext db, CancellationToken cancellationToken) =>
+app.MapGet("/api/analytics/staff-performance", async (Guid? branchId, DateOnly? from, DateOnly? to, AnalyticsDbContext db, CancellationToken cancellationToken) =>
 {
-    var query = db.Bookings.AsNoTracking();
-    if (branchId is not null) query = query.Where(booking => booking.BranchId == branchId);
+    var query = AnalyticsQueries.FilterOrders(db.Orders.AsNoTracking(), branchId, from, to);
+    return Results.Ok(await query.Where(order => order.HookahMasterId != null).GroupBy(order => order.HookahMasterId!.Value).Select(group => new StaffPerformance(group.Key, $"Staff {group.Key.ToString().Substring(0, 8)}", group.Count(), 0, TimeSpan.Zero)).OrderByDescending(metric => metric.OrdersServed).ToListAsync(cancellationToken));
+});
+
+app.MapGet("/api/analytics/table-load", async (Guid? branchId, DateOnly? from, DateOnly? to, AnalyticsDbContext db, CancellationToken cancellationToken) =>
+{
+    var query = AnalyticsQueries.FilterBookings(db.Bookings.AsNoTracking(), branchId, from, to);
     return Results.Ok(await query.GroupBy(booking => new { booking.BranchId, booking.TableId }).Select(group => new TableLoad(group.Key.BranchId, group.Key.TableId, $"Table {group.Key.TableId.ToString().Substring(0, 8)}", Math.Min(100, group.Count() * 5m))).OrderByDescending(metric => metric.LoadPercent).ToListAsync(cancellationToken));
 });
 
@@ -201,7 +206,43 @@ sealed class AnalyticsRabbitMqConsumer(IServiceScopeFactory scopeFactory, IConfi
 }
 
 public sealed record DashboardMetrics(decimal Revenue, int OrdersCount, decimal AverageCheck, int BookingsCount, decimal NoShowRate, DateOnly From, DateOnly To, Guid? BranchId);
-public sealed record TopMix(Guid MixId, string Name, int OrdersCount, decimal Rating);
+
+static class AnalyticsQueries
+{
+    public static IQueryable<AnalyticsOrderEntity> FilterOrders(IQueryable<AnalyticsOrderEntity> query, Guid? branchId, DateOnly? from, DateOnly? to)
+    {
+        if (branchId is not null) query = query.Where(order => order.BranchId == branchId);
+        if (from is not null)
+        {
+            var fromDate = from.Value.ToDateTime(TimeOnly.MinValue);
+            query = query.Where(order => order.CreatedAt.UtcDateTime >= fromDate);
+        }
+        if (to is not null)
+        {
+            var toDate = to.Value.ToDateTime(TimeOnly.MaxValue);
+            query = query.Where(order => order.CreatedAt.UtcDateTime <= toDate);
+        }
+        return query;
+    }
+
+    public static IQueryable<AnalyticsBookingEntity> FilterBookings(IQueryable<AnalyticsBookingEntity> query, Guid? branchId, DateOnly? from, DateOnly? to)
+    {
+        if (branchId is not null) query = query.Where(booking => booking.BranchId == branchId);
+        if (from is not null)
+        {
+            var fromDate = from.Value.ToDateTime(TimeOnly.MinValue);
+            query = query.Where(booking => booking.CreatedAt.UtcDateTime >= fromDate);
+        }
+        if (to is not null)
+        {
+            var toDate = to.Value.ToDateTime(TimeOnly.MaxValue);
+            query = query.Where(booking => booking.CreatedAt.UtcDateTime <= toDate);
+        }
+        return query;
+    }
+}
+
+public sealed record TopMix(Guid MixId, string Name, int OrdersCount, decimal Rating, decimal Revenue);
 public sealed record TobaccoUsage(Guid BranchId, Guid TobaccoId, decimal Grams);
 public sealed record StaffPerformance(Guid StaffId, string StaffName, int OrdersServed, decimal Rating, TimeSpan AveragePrepareTime);
 public sealed record TableLoad(Guid BranchId, Guid TableId, string TableName, decimal LoadPercent);

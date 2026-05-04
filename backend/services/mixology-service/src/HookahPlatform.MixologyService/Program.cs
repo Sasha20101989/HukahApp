@@ -160,15 +160,35 @@ app.MapPatch("/api/mixes/{id:guid}", async (Guid id, UpdateMixRequest request, M
 {
     var mix = await db.Mixes.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
     if (mix is null) return HttpResults.NotFound("Mix", id);
+    if (request.BowlId is not null || request.Items is not null)
+    {
+        var nextBowlId = request.BowlId ?? mix.BowlId;
+        var nextItems = request.Items ?? await db.MixItems.AsNoTracking()
+            .Where(item => item.MixId == id)
+            .Select(item => new MixInputItem(item.TobaccoId, item.Percent))
+            .ToListAsync(cancellationToken);
+        var result = await CalculateMixAsync(nextBowlId, nextItems, db, cancellationToken);
+        if (result.Error is not null || result.Value is null) return HttpResults.Validation(result.Error ?? "Mix calculation failed.");
+        mix.BowlId = nextBowlId;
+        mix.TotalGrams = result.Value.TotalGrams;
+        mix.Cost = result.Value.Cost;
+        db.MixItems.RemoveRange(await db.MixItems.Where(item => item.MixId == id).ToListAsync(cancellationToken));
+        foreach (var item in result.Value.Items)
+        {
+            db.MixItems.Add(new MixItemEntity { Id = Guid.NewGuid(), MixId = mix.Id, TobaccoId = item.TobaccoId, Percent = item.Percent, Grams = item.Grams });
+        }
+    }
     mix.Name = request.Name ?? mix.Name;
     mix.Description = request.Description ?? mix.Description;
     mix.Strength = request.Strength ?? mix.Strength;
     mix.TasteProfile = request.TasteProfile ?? mix.TasteProfile;
+    mix.IsPublic = request.IsPublic ?? mix.IsPublic;
+    mix.IsActive = request.IsActive ?? mix.IsActive;
     if (request.Price is not null)
     {
         mix.Price = request.Price.Value;
-        mix.Margin = request.Price.Value - mix.Cost;
     }
+    mix.Margin = mix.Price - mix.Cost;
     await db.SaveChangesAsync(cancellationToken);
     var items = await db.MixItems.AsNoTracking().Where(item => item.MixId == mix.Id).ToListAsync(cancellationToken);
     return Results.Ok(ToMixDto(mix, items));
@@ -263,7 +283,7 @@ public sealed record MixInputItem(Guid TobaccoId, decimal Percent);
 public sealed record CalculateMixRequest(Guid BowlId, IReadOnlyCollection<MixInputItem> Items);
 public sealed record CreateMixRequest(string Name, string? Description, Guid BowlId, string Strength, string TasteProfile, bool IsPublic, Guid? CreatedBy, decimal? Price, IReadOnlyCollection<MixInputItem> Items);
 public sealed record RecommendMixRequest(Guid BranchId, string Strength, string TasteProfile, Guid BowlId, bool AvailableOnly);
-public sealed record UpdateMixRequest(string? Name, string? Description, string? Strength, string? TasteProfile, decimal? Price);
+public sealed record UpdateMixRequest(string? Name, string? Description, Guid? BowlId, string? Strength, string? TasteProfile, decimal? Price, bool? IsPublic, bool? IsActive, IReadOnlyCollection<MixInputItem>? Items);
 public sealed record UpdateMixVisibilityRequest(bool IsPublic);
 public sealed record CalculatedMix(decimal TotalGrams, decimal Cost, IReadOnlyCollection<CalculatedMixItem> Items);
 public sealed record CalculatedMixItem(Guid TobaccoId, decimal Percent, decimal Grams);

@@ -52,6 +52,34 @@ app.MapPost("/api/promocodes", async (CreatePromocodeRequest request, PromoDbCon
     return Results.Created($"/api/promocodes/{promocode.Code}", promocode);
 });
 
+app.MapPatch("/api/promocodes/{code}", async (string code, UpdatePromocodeRequest request, PromoDbContext db, CancellationToken cancellationToken) =>
+{
+    var normalized = code.ToUpperInvariant();
+    var promocode = await db.Promocodes.FirstOrDefaultAsync(candidate => candidate.Code == normalized, cancellationToken);
+    if (promocode is null)
+    {
+        return HttpResults.NotFound("Promocode", Guid.Empty);
+    }
+
+    var nextValidFrom = request.ValidFrom ?? promocode.ValidFrom;
+    var nextValidTo = request.ValidTo ?? promocode.ValidTo;
+    if (nextValidTo < nextValidFrom)
+    {
+        return HttpResults.Validation("validTo must be greater than or equal to validFrom.");
+    }
+
+    if (!string.IsNullOrWhiteSpace(request.DiscountType)) promocode.DiscountType = request.DiscountType;
+    promocode.DiscountValue = request.DiscountValue ?? promocode.DiscountValue;
+    promocode.ValidFrom = nextValidFrom;
+    promocode.ValidTo = nextValidTo;
+    promocode.MaxRedemptions = request.MaxRedemptions ?? promocode.MaxRedemptions;
+    promocode.PerClientLimit = request.PerClientLimit ?? promocode.PerClientLimit;
+    promocode.IsActive = request.IsActive ?? promocode.IsActive;
+
+    await db.SaveChangesAsync(cancellationToken);
+    return Results.Ok(promocode);
+});
+
 app.MapPost("/api/promocodes/validate", async (ValidatePromocodeRequest request, PromoDbContext db, CancellationToken cancellationToken) =>
 {
     return Results.Ok(await ValidatePromocodeAsync(request, db, cancellationToken));
@@ -133,6 +161,7 @@ static async Task<PromoValidation> ValidatePromocodeAsync(ValidatePromocodeReque
 }
 
 public sealed record CreatePromocodeRequest(string Code, string DiscountType, decimal DiscountValue, DateOnly ValidFrom, DateOnly ValidTo, int? MaxRedemptions, int PerClientLimit);
+public sealed record UpdatePromocodeRequest(string? DiscountType, decimal? DiscountValue, DateOnly? ValidFrom, DateOnly? ValidTo, int? MaxRedemptions, int? PerClientLimit, bool? IsActive);
 public sealed record ValidatePromocodeRequest(string Code, Guid ClientId, decimal OrderAmount);
 public sealed record RedeemPromocodeRequest(string Code, Guid ClientId, Guid? OrderId, decimal OrderAmount);
 public sealed record PromoValidation(bool IsValid, decimal DiscountAmount, decimal DiscountedTotal, string Message);

@@ -97,6 +97,10 @@ create table if not exists zones (
     name varchar(160) not null,
     description text,
     color varchar(32),
+    x_position numeric(10, 2) not null default 40,
+    y_position numeric(10, 2) not null default 40,
+    width numeric(10, 2) not null default 360,
+    height numeric(10, 2) not null default 220,
     is_active boolean not null default true
 );
 
@@ -275,6 +279,10 @@ create table if not exists payments (
     type varchar(40) not null,
     created_at timestamp with time zone not null default now()
 );
+
+create unique index if not exists ux_payments_external_payment_id
+    on payments(external_payment_id)
+    where external_payment_id is not null;
 
 create table if not exists notification_templates (
     code varchar(120) primary key,
@@ -548,8 +556,8 @@ insert into halls(id, branch_id, name, description) values
     ('20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'Main hall', 'First floor')
 on conflict (id) do nothing;
 
-insert into zones(id, branch_id, name, description, color) values
-    ('21000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'Main zone', 'Central seating area', '#2f7d6d')
+insert into zones(id, branch_id, name, description, color, x_position, y_position, width, height) values
+    ('21000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'Main zone', 'Central seating area', '#2f7d6d', 30, 40, 460, 280)
 on conflict (id) do nothing;
 
 insert into tables(id, hall_id, zone_id, name, capacity, status, x_position, y_position) values

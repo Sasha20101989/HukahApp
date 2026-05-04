@@ -225,8 +225,10 @@ app.MapPatch("/api/bookings/{id:guid}/cancel", async (Guid id, CancelBookingRequ
 {
     var booking = await db.Bookings.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
     if (booking is null) return HttpResults.NotFound("Booking", id);
+    var reason = request.Reason?.Trim();
+    if (string.IsNullOrWhiteSpace(reason)) return HttpResults.Validation("Cancellation reason is required.");
     booking.Status = BookingStatuses.Cancelled;
-    var cancelled = new BookingCancelled(id, request.Reason, DateTimeOffset.UtcNow);
+    var cancelled = new BookingCancelled(id, reason, DateTimeOffset.UtcNow);
     var outboxMessage = db.AddOutboxMessage(cancelled);
     await db.SaveChangesAsync(cancellationToken);
     await InvalidateAvailabilityForBookingAsync(cache, booking, cancellationToken);

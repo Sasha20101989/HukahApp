@@ -6,10 +6,10 @@ public static class EndpointAccessPolicy
     [
         new("GET", "/api/users/me", []),
         new("GET", "/api/users/", []),
-        new("GET", "/api/users", [PermissionCodes.StaffManage]),
+        new("GET", "/api/users", [PermissionCodes.StaffManage, PermissionCodes.BookingsManage, PermissionCodes.OrdersManage]),
         new("POST", "/api/users/clients", [PermissionCodes.BookingsCreate, PermissionCodes.StaffManage]),
         new("POST", "/api/users/staff", [PermissionCodes.StaffManage]),
-        new("PATCH", "/api/users", [PermissionCodes.StaffManage]),
+        new("PATCH", "/api/users", [PermissionCodes.BookingsCreate, PermissionCodes.StaffManage]),
         new("DELETE", "/api/users", [PermissionCodes.StaffManage]),
         new("GET", "/api/staff", [PermissionCodes.StaffManage]),
         new("POST", "/api/staff", [PermissionCodes.StaffManage]),
@@ -23,13 +23,17 @@ public static class EndpointAccessPolicy
         new("PUT", "/api/branches", [PermissionCodes.BranchesManage]),
         new("POST", "/api/zones", [PermissionCodes.BranchesManage]),
         new("PATCH", "/api/zones", [PermissionCodes.BranchesManage]),
+        new("DELETE", "/api/zones", [PermissionCodes.BranchesManage]),
         new("POST", "/api/halls", [PermissionCodes.BranchesManage]),
         new("PATCH", "/api/halls", [PermissionCodes.BranchesManage]),
+        new("DELETE", "/api/halls", [PermissionCodes.BranchesManage]),
         new("POST", "/api/tables", [PermissionCodes.BranchesManage]),
         new("PATCH", "/api/tables", [PermissionCodes.BranchesManage]),
+        new("DELETE", "/api/tables", [PermissionCodes.BranchesManage]),
         new("GET", "/api/tables", [PermissionCodes.BranchesManage]),
         new("POST", "/api/hookahs", [PermissionCodes.BranchesManage]),
         new("PATCH", "/api/hookahs", [PermissionCodes.BranchesManage]),
+        new("DELETE", "/api/hookahs", [PermissionCodes.BranchesManage]),
         new("GET", "/api/hookahs", [PermissionCodes.BranchesManage]),
 
         new("GET", "/api/bowls", [PermissionCodes.MixesManage]),
@@ -65,12 +69,20 @@ public static class EndpointAccessPolicy
         new("POST", "/api/payments", [PermissionCodes.OrdersManage]),
 
         new("GET", "/api/notifications", [PermissionCodes.BookingsManage]),
+        new("GET", "/api/notifications/templates", [PermissionCodes.BookingsManage]),
+        new("POST", "/api/notifications/templates", [PermissionCodes.BookingsManage]),
+        new("PUT", "/api/notifications/templates", [PermissionCodes.BookingsManage]),
+        new("DELETE", "/api/notifications/templates", [PermissionCodes.BookingsManage]),
         new("POST", "/api/notifications/send", [PermissionCodes.BookingsManage]),
         new("PATCH", "/api/notifications", [PermissionCodes.BookingsManage]),
+        new("DELETE", "/api/notifications", [PermissionCodes.BookingsCreate, PermissionCodes.BookingsManage]),
+        new("GET", "/api/notifications/preferences", [PermissionCodes.BookingsCreate, PermissionCodes.BookingsManage]),
         new("PUT", "/api/notifications/preferences", [PermissionCodes.BookingsCreate, PermissionCodes.BookingsManage]),
         new("GET", "/api/analytics", [PermissionCodes.AnalyticsRead]),
         new("POST", "/api/analytics", [PermissionCodes.AnalyticsRead]),
         new("POST", "/api/reviews", [PermissionCodes.BookingsCreate, PermissionCodes.OrdersManage]),
+        new("PATCH", "/api/reviews", [PermissionCodes.BookingsCreate, PermissionCodes.OrdersManage]),
+        new("DELETE", "/api/reviews", [PermissionCodes.BookingsCreate, PermissionCodes.OrdersManage]),
         new("GET", "/api/promocodes", [PermissionCodes.OrdersManage]),
         new("POST", "/api/promocodes", [PermissionCodes.OrdersManage]),
         new("PATCH", "/api/promocodes", [PermissionCodes.OrdersManage]),
@@ -92,7 +104,8 @@ public static class EndpointAccessPolicy
         "/api/branches",
         "/api/mixes",
         "/api/reviews",
-        "/api/bookings/availability"
+        "/api/bookings/availability",
+        "/api/payments/status"
     ];
 
     private static readonly string[] InternalPrefixes =

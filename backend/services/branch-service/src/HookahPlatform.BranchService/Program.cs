@@ -85,11 +85,38 @@ app.MapGet("/api/branches/{id:guid}/floor-plan", async (Guid id, BranchDbContext
 app.MapPost("/api/zones", async (CreateZoneRequest request, BranchDbContext db, IDistributedCache cache, CancellationToken cancellationToken) =>
 {
     if (!await db.Branches.AnyAsync(branch => branch.Id == request.BranchId, cancellationToken)) return HttpResults.NotFound("Branch", request.BranchId);
-    var zone = new ZoneEntity { Id = Guid.NewGuid(), BranchId = request.BranchId, Name = request.Name, Description = request.Description, Color = request.Color, IsActive = true };
+    var zone = new ZoneEntity { Id = Guid.NewGuid(), BranchId = request.BranchId, Name = request.Name, Description = request.Description, Color = request.Color, XPosition = request.XPosition ?? 40, YPosition = request.YPosition ?? 40, Width = request.Width ?? 360, Height = request.Height ?? 220, IsActive = true };
     db.Zones.Add(zone);
     await db.SaveChangesAsync(cancellationToken);
     await cache.RemoveAsync(BranchTablesCacheKey(request.BranchId), cancellationToken);
     return Results.Created($"/api/zones/{zone.Id}", zone);
+});
+
+app.MapPatch("/api/zones/{id:guid}", async (Guid id, UpdateZoneRequest request, BranchDbContext db, IDistributedCache cache, CancellationToken cancellationToken) =>
+{
+    var zone = await db.Zones.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    if (zone is null) return HttpResults.NotFound("Zone", id);
+    zone.Name = request.Name ?? zone.Name;
+    zone.Description = request.Description ?? zone.Description;
+    zone.Color = request.Color ?? zone.Color;
+    zone.XPosition = request.XPosition ?? zone.XPosition;
+    zone.YPosition = request.YPosition ?? zone.YPosition;
+    zone.Width = request.Width ?? zone.Width;
+    zone.Height = request.Height ?? zone.Height;
+    zone.IsActive = request.IsActive ?? zone.IsActive;
+    await db.SaveChangesAsync(cancellationToken);
+    await cache.RemoveAsync(BranchTablesCacheKey(zone.BranchId), cancellationToken);
+    return Results.Ok(zone);
+});
+
+app.MapDelete("/api/zones/{id:guid}", async (Guid id, BranchDbContext db, IDistributedCache cache, CancellationToken cancellationToken) =>
+{
+    var zone = await db.Zones.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    if (zone is null) return HttpResults.NotFound("Zone", id);
+    zone.IsActive = false;
+    await db.SaveChangesAsync(cancellationToken);
+    await cache.RemoveAsync(BranchTablesCacheKey(zone.BranchId), cancellationToken);
+    return Results.NoContent();
 });
 
 app.MapPost("/api/halls", async (CreateHallRequest request, BranchDbContext db, IDistributedCache cache, CancellationToken cancellationToken) =>
@@ -100,6 +127,28 @@ app.MapPost("/api/halls", async (CreateHallRequest request, BranchDbContext db, 
     await db.SaveChangesAsync(cancellationToken);
     await cache.RemoveAsync(BranchTablesCacheKey(request.BranchId), cancellationToken);
     return Results.Created($"/api/halls/{hall.Id}", hall);
+});
+
+app.MapPatch("/api/halls/{id:guid}", async (Guid id, UpdateHallRequest request, BranchDbContext db, IDistributedCache cache, CancellationToken cancellationToken) =>
+{
+    var hall = await db.Halls.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    if (hall is null) return HttpResults.NotFound("Hall", id);
+    hall.Name = request.Name ?? hall.Name;
+    hall.Description = request.Description ?? hall.Description;
+    await db.SaveChangesAsync(cancellationToken);
+    await cache.RemoveAsync(BranchTablesCacheKey(hall.BranchId), cancellationToken);
+    return Results.Ok(hall);
+});
+
+app.MapDelete("/api/halls/{id:guid}", async (Guid id, BranchDbContext db, IDistributedCache cache, CancellationToken cancellationToken) =>
+{
+    var hall = await db.Halls.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    if (hall is null) return HttpResults.NotFound("Hall", id);
+    if (await db.Tables.AnyAsync(table => table.HallId == id && table.IsActive, cancellationToken)) return HttpResults.Conflict("Hall has active tables.");
+    db.Halls.Remove(hall);
+    await db.SaveChangesAsync(cancellationToken);
+    await cache.RemoveAsync(BranchTablesCacheKey(hall.BranchId), cancellationToken);
+    return Results.NoContent();
 });
 
 app.MapGet("/api/halls/{id:guid}/tables", async (Guid id, BranchDbContext db, CancellationToken cancellationToken) =>
@@ -122,6 +171,28 @@ app.MapPost("/api/tables", async (CreateTableRequest request, BranchDbContext db
     return Results.Created($"/api/tables/{table.Id}", table);
 });
 
+app.MapPatch("/api/tables/{id:guid}", async (Guid id, UpdateTableRequest request, BranchDbContext db, IDistributedCache cache, CancellationToken cancellationToken) =>
+{
+    var table = await db.Tables.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    if (table is null) return HttpResults.NotFound("Table", id);
+    if (request.HallId is not null && !await db.Halls.AnyAsync(hall => hall.Id == request.HallId.Value, cancellationToken)) return HttpResults.NotFound("Hall", request.HallId.Value);
+    if (request.ZoneId is not null && !await db.Zones.AnyAsync(zone => zone.Id == request.ZoneId.Value, cancellationToken)) return HttpResults.NotFound("Zone", request.ZoneId.Value);
+    var oldHall = await db.Halls.AsNoTracking().FirstAsync(candidate => candidate.Id == table.HallId, cancellationToken);
+    table.HallId = request.HallId ?? table.HallId;
+    table.ZoneId = request.ZoneId ?? table.ZoneId;
+    table.Name = request.Name ?? table.Name;
+    table.Capacity = request.Capacity ?? table.Capacity;
+    table.Status = request.Status ?? table.Status;
+    table.XPosition = request.XPosition ?? table.XPosition;
+    table.YPosition = request.YPosition ?? table.YPosition;
+    table.IsActive = request.IsActive ?? table.IsActive;
+    var newHall = await db.Halls.AsNoTracking().FirstAsync(candidate => candidate.Id == table.HallId, cancellationToken);
+    await db.SaveChangesAsync(cancellationToken);
+    await cache.RemoveAsync(BranchTablesCacheKey(oldHall.BranchId), cancellationToken);
+    await cache.RemoveAsync(BranchTablesCacheKey(newHall.BranchId), cancellationToken);
+    return Results.Ok(table);
+});
+
 app.MapPatch("/api/tables/{id:guid}/status", async (Guid id, UpdateTableStatusRequest request, BranchDbContext db, IDistributedCache cache, CancellationToken cancellationToken) =>
 {
     var table = await db.Tables.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
@@ -132,6 +203,18 @@ app.MapPatch("/api/tables/{id:guid}/status", async (Guid id, UpdateTableStatusRe
     await cache.RemoveAsync(BranchTablesCacheKey(hall.BranchId), cancellationToken);
     await cache.SetJsonAsync($"crm:branch:{hall.BranchId}:table:{table.Id}:state", new RuntimeResourceState(table.Id, "TABLE", request.Status, DateTimeOffset.UtcNow), TimeSpan.FromHours(12), cancellationToken);
     return Results.Ok(table);
+});
+
+app.MapDelete("/api/tables/{id:guid}", async (Guid id, BranchDbContext db, IDistributedCache cache, CancellationToken cancellationToken) =>
+{
+    var table = await db.Tables.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    if (table is null) return HttpResults.NotFound("Table", id);
+    var hall = await db.Halls.AsNoTracking().FirstAsync(candidate => candidate.Id == table.HallId, cancellationToken);
+    table.IsActive = false;
+    table.Status = "WRITTEN_OFF";
+    await db.SaveChangesAsync(cancellationToken);
+    await cache.RemoveAsync(BranchTablesCacheKey(hall.BranchId), cancellationToken);
+    return Results.NoContent();
 });
 
 app.MapGet("/api/hookahs", async (Guid? branchId, string? status, BranchDbContext db, CancellationToken cancellationToken) =>
@@ -157,6 +240,21 @@ app.MapPost("/api/hookahs", async (CreateHookahRequest request, BranchDbContext 
     return Results.Created($"/api/hookahs/{hookah.Id}", hookah);
 });
 
+app.MapPatch("/api/hookahs/{id:guid}", async (Guid id, UpdateHookahRequest request, BranchDbContext db, IDistributedCache cache, CancellationToken cancellationToken) =>
+{
+    var hookah = await db.Hookahs.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    if (hookah is null) return HttpResults.NotFound("Hookah", id);
+    hookah.Name = request.Name ?? hookah.Name;
+    hookah.Brand = request.Brand ?? hookah.Brand;
+    hookah.Model = request.Model ?? hookah.Model;
+    hookah.Status = request.Status ?? hookah.Status;
+    hookah.PhotoUrl = request.PhotoUrl ?? hookah.PhotoUrl;
+    hookah.LastServiceAt = request.LastServiceAt ?? hookah.LastServiceAt;
+    await db.SaveChangesAsync(cancellationToken);
+    await cache.SetJsonAsync($"crm:branch:{hookah.BranchId}:hookah:{hookah.Id}:state", new RuntimeResourceState(hookah.Id, "HOOKAH", hookah.Status, DateTimeOffset.UtcNow), TimeSpan.FromHours(12), cancellationToken);
+    return Results.Ok(hookah);
+});
+
 app.MapPatch("/api/hookahs/{id:guid}/status", async (Guid id, UpdateHookahStatusRequest request, BranchDbContext db, IDistributedCache cache, CancellationToken cancellationToken) =>
 {
     var hookah = await db.Hookahs.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
@@ -165,6 +263,16 @@ app.MapPatch("/api/hookahs/{id:guid}/status", async (Guid id, UpdateHookahStatus
     await db.SaveChangesAsync(cancellationToken);
     await cache.SetJsonAsync($"crm:branch:{hookah.BranchId}:hookah:{hookah.Id}:state", new RuntimeResourceState(hookah.Id, "HOOKAH", hookah.Status, DateTimeOffset.UtcNow), TimeSpan.FromHours(12), cancellationToken);
     return Results.Ok(hookah);
+});
+
+app.MapDelete("/api/hookahs/{id:guid}", async (Guid id, BranchDbContext db, IDistributedCache cache, CancellationToken cancellationToken) =>
+{
+    var hookah = await db.Hookahs.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    if (hookah is null) return HttpResults.NotFound("Hookah", id);
+    hookah.Status = "WRITTEN_OFF";
+    await db.SaveChangesAsync(cancellationToken);
+    await cache.SetJsonAsync($"crm:branch:{hookah.BranchId}:hookah:{hookah.Id}:state", new RuntimeResourceState(hookah.Id, "HOOKAH", hookah.Status, DateTimeOffset.UtcNow), TimeSpan.FromHours(12), cancellationToken);
+    return Results.NoContent();
 });
 
 app.Run();
@@ -182,10 +290,14 @@ public sealed record FloorPlan(Guid BranchId, IReadOnlyCollection<HallEntity> Ha
 public sealed record CreateBranchRequest(string Name, string Address, string Phone, string Timezone);
 public sealed record UpdateBranchRequest(string? Name, string? Address, string? Phone, string? Timezone, bool? IsActive);
 public sealed record UpdateBranchWorkingHoursRequest(DayOfWeek DayOfWeek, TimeOnly OpensAt, TimeOnly ClosesAt, bool IsClosed);
-public sealed record CreateZoneRequest(Guid BranchId, string Name, string? Description, string? Color);
+public sealed record CreateZoneRequest(Guid BranchId, string Name, string? Description, string? Color, decimal? XPosition, decimal? YPosition, decimal? Width, decimal? Height);
+public sealed record UpdateZoneRequest(string? Name, string? Description, string? Color, decimal? XPosition, decimal? YPosition, decimal? Width, decimal? Height, bool? IsActive);
 public sealed record CreateHallRequest(Guid BranchId, string Name, string? Description);
+public sealed record UpdateHallRequest(string? Name, string? Description);
 public sealed record CreateTableRequest(Guid HallId, Guid? ZoneId, string Name, int Capacity, decimal XPosition, decimal YPosition);
+public sealed record UpdateTableRequest(Guid? HallId, Guid? ZoneId, string? Name, int? Capacity, string? Status, decimal? XPosition, decimal? YPosition, bool? IsActive);
 public sealed record UpdateTableStatusRequest(string Status);
 public sealed record CreateHookahRequest(Guid BranchId, string Name, string Brand, string Model, string Status, string? PhotoUrl);
+public sealed record UpdateHookahRequest(string? Name, string? Brand, string? Model, string? Status, string? PhotoUrl, DateTimeOffset? LastServiceAt);
 public sealed record UpdateHookahStatusRequest(string Status);
 public sealed record RuntimeResourceState(Guid ResourceId, string ResourceType, string Status, DateTimeOffset UpdatedAt);

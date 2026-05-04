@@ -203,6 +203,7 @@ services:
       Services__booking-service__BaseUrl: http://booking-service:8080
       Services__order-service__BaseUrl: http://order-service:8080
       Services__promo-service__BaseUrl: http://promo-service:8080
+      Payments__YooKassa__WebhookSecret: local-yookassa-webhook-secret
     depends_on:
       db-migrator:
         condition: service_completed_successfully
@@ -216,6 +217,10 @@ services:
     command: ["HookahPlatform.NotificationService.dll"]
     environment:
       <<: *service-events
+      Services__user-service__BaseUrl: http://user-service:8080
+      Services__booking-service__BaseUrl: http://booking-service:8080
+      Services__payment-service__BaseUrl: http://payment-service:8080
+      Services__order-service__BaseUrl: http://order-service:8080
       RabbitMQ__Consumers__Enabled: "true"
       RabbitMQ__Consumers__NotificationQueue: notification.events
     depends_on:

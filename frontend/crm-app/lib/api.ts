@@ -1,89 +1,183 @@
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8080";
 
+export type AuthResponse = { userId: string; accessToken: string; refreshToken: string };
+export type RoleCode = "OWNER" | "MANAGER" | "HOOKAH_MASTER" | "WAITER" | "CLIENT";
+export type PermissionCode = "branches.manage" | "staff.manage" | "mixes.manage" | "inventory.manage" | "orders.manage" | "bookings.manage" | "analytics.read" | "bookings.create" | "*";
+export type UserProfile = { id: string; name: string; phone: string; email?: string | null; role: RoleCode; branchId?: string | null; status: string };
 export type Branch = { id: string; name: string; address: string; phone: string; timezone: string; isActive: boolean };
+export type BranchWorkingHours = { branchId: string; dayOfWeek: number; opensAt: string; closesAt: string; isClosed: boolean };
 export type FloorPlan = { branchId: string; halls: Hall[]; zones: Zone[]; tables: Table[] };
-export type Hall = { id: string; branchId: string; name: string; description?: string };
-export type Zone = { id: string; branchId: string; name: string; color?: string; isActive: boolean };
+export type Hall = { id: string; branchId: string; name: string; description?: string | null };
+export type Zone = { id: string; branchId: string; name: string; description?: string | null; color?: string | null; xPosition: number; yPosition: number; width: number; height: number; isActive: boolean };
 export type Table = { id: string; hallId: string; zoneId?: string | null; name: string; capacity: number; status: string; xPosition: number; yPosition: number; isActive: boolean };
-export type Hookah = { id: string; branchId: string; name: string; brand: string; model: string; status: string };
+export type Hookah = { id: string; branchId: string; name: string; brand: string; model: string; status: string; photoUrl?: string | null; lastServiceAt?: string | null };
+export type Bowl = { id: string; name: string; type: string; capacityGrams: number; recommendedStrength: string; averageSmokeMinutes: number; isActive: boolean };
+export type Tobacco = { id: string; brand: string; line?: string | null; flavor: string; strength: string; category: string; description?: string | null; costPerGram: number; isActive: boolean; photoUrl?: string | null };
 export type RuntimeOrder = { orderId: string; branchId: string; tableId: string; hookahId: string; clientId?: string | null; hookahMasterId?: string | null; status: string; totalPrice: number; nextCoalChangeAt?: string | null; updatedAt: string };
-export type Order = { id: string; branchId: string; tableId: string; clientId?: string | null; hookahMasterId?: string | null; waiterId?: string | null; status: string; totalPrice: number; createdAt: string; servedAt?: string | null; completedAt?: string | null; nextCoalChangeAt?: string | null; items: OrderItem[] };
-export type OrderItem = { id: string; hookahId: string; bowlId: string; mixId: string; price: number; status: string };
 export type Booking = { id: string; clientId: string; branchId: string; tableId: string; startTime: string; endTime: string; guestsCount: number; status: string; depositAmount: number; comment?: string | null };
 export type InventoryItem = { id: string; branchId: string; tobaccoId: string; stockGrams: number; minStockGrams: number; updatedAt: string };
-export type InventoryMovement = { id: string; branchId: string; tobaccoId: string; type: string; amountGrams: number; reason?: string | null; orderId?: string | null; createdAt: string };
-export type Mix = { id: string; name: string; description?: string | null; bowlId: string; strength: string; tasteProfile: string; totalGrams: number; price: number; cost?: number; margin?: number; isPublic: boolean; isActive: boolean };
-export type StaffShift = { id: string; staffId: string; branchId: string; startsAt: string; endsAt: string; status: string; roleOnShift?: string | null };
-export type DashboardMetrics = { revenue: number; ordersCount: number; averageCheck: number; bookingsCount: number; noShowRate: number };
+export type InventoryMovement = { id: string; branchId: string; tobaccoId: string; type: string; amountGrams: number; reason?: string | null; orderId?: string | null; createdBy?: string | null; createdAt: string };
+export type MixItem = { id: string; tobaccoId: string; percent: number; grams: number };
+export type Mix = { id: string; name: string; description?: string | null; bowlId: string; strength: string; tasteProfile: string; totalGrams: number; price: number; cost?: number; margin?: number; isPublic: boolean; isActive: boolean; items?: MixItem[] };
+export type StaffShift = { id: string; staffId: string; branchId: string; startsAt: string; endsAt: string; status: string; roleOnShift?: string | null; actualStartedAt?: string | null; actualFinishedAt?: string | null; cancelReason?: string | null };
+export type DashboardMetrics = { revenue: number; ordersCount: number; averageCheck: number; bookingsCount: number; noShowRate: number; from?: string; to?: string; branchId?: string | null };
+export type TopMixMetric = { mixId: string; name?: string; ordersCount: number; rating?: number; revenue: number };
+export type TobaccoUsageMetric = { branchId: string; tobaccoId: string; grams?: number; amountGrams?: number };
+export type StaffPerformanceMetric = { staffId: string; staffName: string; ordersServed: number; rating: number };
+export type TableLoadMetric = { branchId: string; tableId: string; tableName: string; loadPercent: number };
+export type Payment = { id: string; clientId: string; orderId?: string | null; bookingId?: string | null; originalAmount: number; discountAmount: number; payableAmount: number; refundedAmount: number; currency: string; provider: string; promocode?: string | null; externalPaymentId?: string | null; status: string; type: string; createdAt: string };
 
-export const demoBranch: Branch = { id: "10000000-0000-0000-0000-000000000001", name: "Hookah Place Center", address: "Lenina, 1", phone: "+79990000000", timezone: "Europe/Moscow", isActive: true };
+export type NotificationItem = { id: string; userId: string; channel: string; title: string; message: string; isRead: boolean; createdAt: string };
+export type NotificationTemplate = { code: string; channel: string; title: string; message: string };
+export type NotificationPreference = { userId: string; crmEnabled: boolean; telegramEnabled: boolean; smsEnabled: boolean; emailEnabled: boolean; pushEnabled: boolean };
+export type Promocode = { id: string; code: string; discountType: string; discountValue: number; validFrom: string; validTo: string; maxRedemptions?: number | null; perClientLimit: number; isActive: boolean };
+export type Review = { id: string; clientId: string; mixId?: string | null; orderId?: string | null; rating: number; text?: string | null; createdAt: string };
+export type AnalyticsPoint = { label: string; value: number };
 
-export const demoFloorPlan: FloorPlan = {
-  branchId: demoBranch.id,
-  halls: [{ id: "20000000-0000-0000-0000-000000000001", branchId: demoBranch.id, name: "Main hall" }],
-  zones: [{ id: "21000000-0000-0000-0000-000000000001", branchId: demoBranch.id, name: "Main zone", color: "#2f7d6d", isActive: true }],
-  tables: [
-    { id: "30000000-0000-0000-0000-000000000001", hallId: "20000000-0000-0000-0000-000000000001", zoneId: "21000000-0000-0000-0000-000000000001", name: "Стол 1", capacity: 4, status: "OCCUPIED", xPosition: 120, yPosition: 300, isActive: true },
-    { id: "30000000-0000-0000-0000-000000000002", hallId: "20000000-0000-0000-0000-000000000001", zoneId: "21000000-0000-0000-0000-000000000001", name: "Стол 2", capacity: 6, status: "FREE", xPosition: 300, yPosition: 180, isActive: true },
-    { id: "30000000-0000-0000-0000-000000000003", hallId: "20000000-0000-0000-0000-000000000001", zoneId: "21000000-0000-0000-0000-000000000001", name: "VIP 1", capacity: 8, status: "FREE", xPosition: 520, yPosition: 330, isActive: true }
-  ]
+export const rolePermissions: Record<RoleCode, PermissionCode[]> = {
+  OWNER: ["*"],
+  MANAGER: ["branches.manage", "staff.manage", "mixes.manage", "inventory.manage", "orders.manage", "bookings.manage", "analytics.read"],
+  HOOKAH_MASTER: ["mixes.manage", "inventory.manage", "orders.manage"],
+  WAITER: ["orders.manage", "bookings.manage"],
+  CLIENT: ["bookings.create"]
 };
 
-export const demoRuntimeOrders: RuntimeOrder[] = [
-  { orderId: "80000000-0000-0000-0000-000000000001", branchId: demoBranch.id, tableId: demoFloorPlan.tables[0].id, hookahId: "40000000-0000-0000-0000-000000000001", status: "SMOKING", totalPrice: 850, nextCoalChangeAt: new Date(Date.now() + 13 * 60_000).toISOString(), updatedAt: new Date().toISOString() },
-  { orderId: "80000000-0000-0000-0000-000000000002", branchId: demoBranch.id, tableId: demoFloorPlan.tables[1].id, hookahId: "40000000-0000-0000-0000-000000000002", status: "PREPARING", totalPrice: 920, updatedAt: new Date().toISOString() }
-];
+export function hasPermission(role: RoleCode | undefined, permission: PermissionCode) {
+  if (!role) return false;
+  const permissions = rolePermissions[role] ?? [];
+  return permissions.includes("*") || permissions.includes(permission);
+}
 
-export const demoInventory: InventoryItem[] = [
-  { id: "1", branchId: demoBranch.id, tobaccoId: "Darkside Strawberry", stockGrams: 42, minStockGrams: 50, updatedAt: new Date().toISOString() },
-  { id: "2", branchId: demoBranch.id, tobaccoId: "Musthave Mint", stockGrams: 118, minStockGrams: 50, updatedAt: new Date().toISOString() },
-  { id: "3", branchId: demoBranch.id, tobaccoId: "Element Blueberry", stockGrams: 74, minStockGrams: 50, updatedAt: new Date().toISOString() }
-];
+export function loginStaff(phone: string, password: string) {
+  return sendJson<AuthResponse>("POST", "/api/auth/login", { phone, password });
+}
 
-export const demoBookings: Booking[] = [
-  { id: "b1", clientId: "Александр", branchId: demoBranch.id, tableId: demoFloorPlan.tables[1].id, startTime: new Date(Date.now() + 90 * 60_000).toISOString(), endTime: new Date(Date.now() + 210 * 60_000).toISOString(), guestsCount: 4, status: "CONFIRMED", depositAmount: 2000, comment: "День рождения" },
-  { id: "b2", clientId: "Екатерина", branchId: demoBranch.id, tableId: demoFloorPlan.tables[2].id, startTime: new Date(Date.now() + 150 * 60_000).toISOString(), endTime: new Date(Date.now() + 270 * 60_000).toISOString(), guestsCount: 6, status: "WAITING_PAYMENT", depositAmount: 3000 }
-];
+export function refreshAuth(refreshToken: string) {
+  return sendJson<AuthResponse>("POST", "/api/auth/refresh", { refreshToken });
+}
 
-export const demoMixes: Mix[] = [
-  { id: "70000000-0000-0000-0000-000000000001", name: "Berry Ice", description: "Ягодно-свежий микс", bowlId: "50000000-0000-0000-0000-000000000001", strength: "MEDIUM", tasteProfile: "BERRY_FRESH", totalGrams: 18, price: 850, cost: 126, margin: 724, isPublic: true, isActive: true },
-  { id: "70000000-0000-0000-0000-000000000002", name: "Dark Citrus", description: "Плотный цитрус", bowlId: "50000000-0000-0000-0000-000000000001", strength: "STRONG", tasteProfile: "CITRUS", totalGrams: 20, price: 920, cost: 130, margin: 790, isPublic: true, isActive: true }
-];
+export function logoutAuth(refreshToken: string) {
+  return sendJson<void>("POST", "/api/auth/logout", { refreshToken });
+}
 
-export const demoMetrics: DashboardMetrics = { revenue: 450000, ordersCount: 320, averageCheck: 1406, bookingsCount: 120, noShowRate: 8.5 };
+type ApiAuthHooks = {
+  getRefreshToken: () => string | undefined;
+  onRefresh: (auth: AuthResponse) => void;
+  onUnauthorized: () => void;
+};
 
-export async function getJson<T>(path: string, fallback: T): Promise<T> {
-  try {
-    const response = await fetch(`${API_BASE_URL}${path}`, { headers: { "Content-Type": "application/json" } });
-    if (!response.ok) throw new Error(`GET ${path} failed with ${response.status}`);
-    return response.json() as Promise<T>;
-  } catch {
-    return fallback;
+let authHooks: ApiAuthHooks | undefined;
+let refreshInFlight: Promise<AuthResponse> | undefined;
+
+export function configureApiAuth(hooks: ApiAuthHooks) {
+  authHooks = hooks;
+}
+
+export function getJson<T>(path: string, accessToken?: string): Promise<T> {
+  return sendJson<T>("GET", path, undefined, accessToken);
+}
+
+export function patchJson<T>(path: string, payload: unknown, accessToken?: string): Promise<T> {
+  return sendJson<T>("PATCH", path, payload, accessToken);
+}
+
+export function putJson<T>(path: string, payload: unknown, accessToken?: string): Promise<T> {
+  return sendJson<T>("PUT", path, payload, accessToken);
+}
+
+export function postJson<T>(path: string, payload: unknown, accessToken?: string): Promise<T> {
+  return sendJson<T>("POST", path, payload, accessToken);
+}
+
+export function deleteJson<T>(path: string, payload?: unknown, accessToken?: string): Promise<T> {
+  return sendJson<T>("DELETE", path, payload, accessToken);
+}
+
+export class ApiError extends Error {
+  constructor(message: string, public readonly status: number) {
+    super(message);
   }
 }
 
-export async function patchJson<T>(path: string, payload: unknown): Promise<T> {
-  return sendJson<T>("PATCH", path, payload);
+async function sendJson<T>(method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE", path: string, payload?: unknown, accessToken?: string): Promise<T> {
+  const token = await getUsableToken(accessToken);
+  const response = await request(method, path, payload, token);
+
+  if (response.status === 401 && token) {
+    const refreshed = await tryRefresh();
+    if (refreshed) return readResponse<T>(await request(method, path, payload, refreshed.accessToken), method, path);
+    authHooks?.onUnauthorized();
+  }
+
+  return readResponse<T>(response, method, path);
 }
 
-export async function postJson<T>(path: string, payload: unknown): Promise<T> {
-  return sendJson<T>("POST", path, payload);
-}
-
-async function sendJson<T>(method: "POST" | "PATCH" | "DELETE", path: string, payload?: unknown): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+async function request(method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE", path: string, payload?: unknown, accessToken?: string) {
+  return fetch(`${API_BASE_URL}${path}`, {
     method,
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {})
+    },
     body: payload === undefined ? undefined : JSON.stringify(payload)
   });
+}
 
+async function readResponse<T>(response: Response, method: string, path: string): Promise<T> {
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(text || `${method} ${path} failed with ${response.status}`);
+    throw new ApiError(readProblem(text) || `${method} ${path} failed with ${response.status}`, response.status);
   }
 
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
+}
+
+async function getUsableToken(accessToken?: string) {
+  if (!accessToken || !tokenExpiresSoon(accessToken)) return accessToken;
+  return (await tryRefresh())?.accessToken ?? accessToken;
+}
+
+async function tryRefresh() {
+  const refreshToken = authHooks?.getRefreshToken();
+  if (!refreshToken) return undefined;
+  refreshInFlight ??= refreshAuth(refreshToken).finally(() => {
+    refreshInFlight = undefined;
+  });
+  try {
+    const auth = await refreshInFlight;
+    authHooks?.onRefresh(auth);
+    return auth;
+  } catch {
+    authHooks?.onUnauthorized();
+    return undefined;
+  }
+}
+
+function tokenExpiresSoon(token: string) {
+  const payload = readJwtPayload(token);
+  if (!payload?.exp) return false;
+  return payload.exp * 1000 - Date.now() < 60_000;
+}
+
+function readJwtPayload(token: string): { exp?: number } | undefined {
+  try {
+    const [, payload] = token.split(".");
+    if (!payload) return undefined;
+    return JSON.parse(atob(payload.replace(/-/g, "+").replace(/_/g, "/"))) as { exp?: number };
+  } catch {
+    return undefined;
+  }
+}
+
+function readProblem(text: string) {
+  if (!text) return "";
+  try {
+    const parsed = JSON.parse(text) as { message?: string; Message?: string; title?: string; code?: string };
+    return parsed.message ?? parsed.Message ?? parsed.title ?? parsed.code ?? text;
+  } catch {
+    return text;
+  }
 }
 
 export function timeLabel(value?: string | null) {

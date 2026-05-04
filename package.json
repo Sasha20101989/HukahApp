@@ -14,6 +14,9 @@
     "crm:dev": "corepack pnpm --dir frontend/crm-app dev",
     "client:dev": "corepack pnpm --dir frontend/client-app dev",
     "frontend:lint": "corepack pnpm --dir frontend/crm-app lint && corepack pnpm --dir frontend/client-app lint",
-    "frontend:build": "corepack pnpm --dir frontend/crm-app build && corepack pnpm --dir frontend/client-app build"
+    "frontend:build": "corepack pnpm --dir frontend/crm-app build && corepack pnpm --dir frontend/client-app build",
+    "frontend:smoke": "node scripts/frontend-smoke.mjs",
+    "frontend:browser-smoke": "node scripts/browser-smoke.mjs",
+    "api:crud-smoke": "node scripts/api-crud-smoke.mjs"
   }
 }

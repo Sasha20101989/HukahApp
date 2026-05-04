@@ -33,9 +33,20 @@ Implemented client workflows:
 - mix selection without internal cost/margin exposure;
 - booking creation with hold id;
 - deposit payment creation;
+- payment return page with `SUCCESS`, `FAILED`, `PROCESSING`, missing-payment handling, polling and manual retry;
+- production payment redirect contract: `Payments:CheckoutBaseUrl` enables provider redirect, local mode returns directly to `/payment/return` for development;
 - booking history view;
 - review submission;
 - React Query data flow and Zustand booking draft/session state.
+
+## Smoke tests
+
+The repository includes dependency-free smoke checks for local frontend QA:
+
+- `corepack pnpm frontend:smoke` checks server responses, middleware redirects, manifests and payment return routes with `fetch`.
+- `corepack pnpm frontend:browser-smoke` renders CRM/client/payment/account guard pages in headless Chrome/Chromium and fails on missing markers or Next.js runtime error markers.
+
+Expected local defaults are `CRM_URL=http://localhost:3000` and `CLIENT_URL=http://localhost:3001`. Override them for Docker/Nginx or deployed environments.
 
 ## Commands
 

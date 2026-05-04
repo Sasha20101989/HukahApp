@@ -31,14 +31,26 @@ app.MapGet("/api/users/me", async (HttpContext context, UserDbContext db, Cancel
     return user is null ? HttpResults.NotFound("User", currentUserId.Value) : Results.Ok(ToProfile(user, roles));
 });
 
-app.MapGet("/api/users", async (string? role, Guid? branchId, string? status, UserDbContext db, CancellationToken cancellationToken) =>
+app.MapGet("/api/users", async (string? role, Guid? branchId, string? status, HttpContext context, UserDbContext db, CancellationToken cancellationToken) =>
 {
     var roles = await LoadRolesAsync(db, cancellationToken);
     var query = db.Users.AsNoTracking();
+    var roleCode = string.IsNullOrWhiteSpace(role) ? null : ResolveRoleCode(role);
+    var canManageStaff = IsServiceRequest(context) || HasForwardedPermission(context, PermissionCodes.StaffManage);
+
+    if (!canManageStaff)
+    {
+        if (roleCode is null || !roleCode.Equals(RoleCodes.Client, StringComparison.OrdinalIgnoreCase))
+        {
+            return Results.Json(new ProblemDetailsDto("forbidden", "Operational roles can list active clients only."), statusCode: StatusCodes.Status403Forbidden);
+        }
+
+        status = "active";
+        branchId = null;
+    }
 
     if (!string.IsNullOrWhiteSpace(role))
     {
-        var roleCode = ResolveRoleCode(role);
         if (roleCode is null || !roles.Values.Any(candidate => candidate.Equals(roleCode, StringComparison.OrdinalIgnoreCase)))
         {
             return HttpResults.Validation($"Unknown role '{role}'.");
@@ -175,8 +187,19 @@ app.MapPost("/api/users/clients", async (CreateClientProfileRequest request, Use
     return Results.Created($"/api/users/{user.Id}", ToProfile(user, roles));
 });
 
-app.MapPatch("/api/users/{id:guid}", async (Guid id, UpdateUserRequest request, UserDbContext db, CancellationToken cancellationToken) =>
+app.MapPatch("/api/users/{id:guid}", async (Guid id, UpdateUserRequest request, HttpContext context, UserDbContext db, CancellationToken cancellationToken) =>
 {
+    var canManageUsers = IsServiceRequest(context) || HasForwardedPermission(context, PermissionCodes.StaffManage);
+    if (!canManageUsers && GetForwardedUserId(context) != id)
+    {
+        return Results.Json(new ProblemDetailsDto("forbidden", "Users can only update their own profile unless they have staff management permissions."), statusCode: StatusCodes.Status403Forbidden);
+    }
+
+    if (!canManageUsers && (request.BranchId is not null || request.Status is not null))
+    {
+        return HttpResults.Validation("Client profile update can only change name and email.");
+    }
+
     var user = await db.Users.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
     if (user is null)
     {
@@ -285,8 +308,10 @@ app.MapPatch("/api/staff/shifts/{id:guid}/cancel", async (Guid id, CancelStaffSh
 {
     var shift = await db.StaffShifts.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
     if (shift is null) return HttpResults.NotFound("StaffShift", id);
+    var reason = request.Reason?.Trim();
+    if (string.IsNullOrWhiteSpace(reason)) return HttpResults.Validation("Cancellation reason is required.");
     shift.Status = "CANCELLED";
-    shift.CancelReason = request.Reason;
+    shift.CancelReason = reason;
     await db.SaveChangesAsync(cancellationToken);
     return Results.Ok(shift);
 });
