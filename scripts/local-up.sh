@@ -73,6 +73,34 @@ compose() {
   docker compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" "$@"
 }
 
+on_error() {
+  local exit_code=$?
+  echo
+  echo "Local startup failed (exit code: $exit_code)." >&2
+  echo >&2
+  echo "Container status:" >&2
+  compose ps >&2 || true
+  echo >&2
+  cat >&2 <<'HINTS'
+Troubleshooting hints:
+  - If build fails with BuildKit I/O errors like:
+      "write .../buildkit/metadata_v2.db: input/output error"
+    this is usually a local Docker Desktop storage issue.
+    Try: restart Docker Desktop, free disk space, and re-run.
+    Optional cleanup (destructive to build cache):
+      docker builder prune -f
+      docker system prune -f
+
+  - If ports are busy (80/8080/3000/3001), stop the old stack:
+      docker compose -p hookah-platform -f infrastructure/docker-compose.yml down
+
+  - If migrations fail, reset volumes and retry:
+      corepack pnpm local:down -- --volumes
+      corepack pnpm local:up
+HINTS
+  exit "$exit_code"
+}
+
 wait_for_http() {
   local name="$1"
   local url="$2"
@@ -102,6 +130,7 @@ if ! docker compose version >/dev/null 2>&1; then
 fi
 
 cd "$ROOT_DIR"
+trap on_error ERR
 
 echo "Hookah CRM Platform local startup"
 echo "Root: $ROOT_DIR"
