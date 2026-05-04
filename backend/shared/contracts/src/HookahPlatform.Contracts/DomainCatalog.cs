@@ -62,6 +62,7 @@ public static class PermissionCodes
     public const string BookingsManage = "bookings.manage";
     public const string AnalyticsRead = "analytics.read";
     public const string BookingsCreate = "bookings.create";
+    public const string TenantsManage = "tenants.manage";
 }
 
 public static class RolePermissionCatalog
@@ -75,7 +76,8 @@ public static class RolePermissionCatalog
         new(PermissionCodes.OrdersManage, "Manage hookah orders and order statuses"),
         new(PermissionCodes.BookingsManage, "Manage bookings and no-show statuses"),
         new(PermissionCodes.AnalyticsRead, "Read analytics dashboards and reports"),
-        new(PermissionCodes.BookingsCreate, "Create client bookings")
+        new(PermissionCodes.BookingsCreate, "Create client bookings"),
+        new(PermissionCodes.TenantsManage, "Manage SaaS tenants and tenant settings")
     ];
 
     public static readonly RoleDefinition[] Roles =

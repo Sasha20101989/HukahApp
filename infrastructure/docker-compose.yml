@@ -71,6 +71,7 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       OTEL_EXPORTER_OTLP_PROTOCOL: grpc
     depends_on:
+      - tenant-service
       - auth-service
       - user-service
       - branch-service
@@ -83,6 +84,19 @@ services:
       - analytics-service
       - review-service
       - promo-service
+
+  tenant-service:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+      args:
+        PROJECT_PATH: services/tenant-service/src/HookahPlatform.TenantService/HookahPlatform.TenantService.csproj
+    command: ["HookahPlatform.TenantService.dll"]
+    environment:
+      <<: *service-events
+    depends_on:
+      db-migrator:
+        condition: service_completed_successfully
 
   auth-service:
     build:

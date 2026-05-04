@@ -86,7 +86,13 @@ public static class EndpointAccessPolicy
         new("GET", "/api/promocodes", [PermissionCodes.OrdersManage]),
         new("POST", "/api/promocodes", [PermissionCodes.OrdersManage]),
         new("PATCH", "/api/promocodes", [PermissionCodes.OrdersManage]),
-        new("DELETE", "/api/promocodes", [PermissionCodes.OrdersManage])
+        new("DELETE", "/api/promocodes", [PermissionCodes.OrdersManage]),
+
+        new("GET", "/api/tenants", [PermissionCodes.TenantsManage]),
+        new("POST", "/api/tenants", [PermissionCodes.TenantsManage]),
+        new("PATCH", "/api/tenants", [PermissionCodes.TenantsManage]),
+        new("PUT", "/api/tenants", [PermissionCodes.TenantsManage]),
+        new("DELETE", "/api/tenants", [PermissionCodes.TenantsManage])
     ];
 
     private static readonly string[] PublicAllMethodPrefixes =

@@ -4,6 +4,7 @@ public static class ServiceCatalog
 {
     public static readonly ServiceDescriptor[] Services =
     [
+        new("tenant-service", "/api/tenants", "SaaS tenant registry and tenant settings"),
         new("auth-service", "/api/auth", "Registration, login, JWT and refresh sessions"),
         new("user-service", "/api/users", "Clients, staff profiles, roles and branch assignments"),
         new("branch-service", "/api/branches", "Branches, halls, tables and hookah devices"),
@@ -20,6 +21,7 @@ public static class ServiceCatalog
 
     public static readonly ServiceRoute[] Routes =
     [
+        new("/api/tenants", "tenant-service"),
         new("/api/auth", "auth-service"),
         new("/api/users", "user-service"),
         new("/api/staff", "user-service"),
