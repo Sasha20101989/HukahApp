@@ -12,6 +12,8 @@ FROM node:24-alpine AS build
 ARG APP_PATH
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps /app/frontend/crm-app/node_modules ./frontend/crm-app/node_modules
+COPY --from=deps /app/frontend/client-app/node_modules ./frontend/client-app/node_modules
 COPY . .
 RUN corepack enable && pnpm --dir "${APP_PATH}" build
 
