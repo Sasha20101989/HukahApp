@@ -95,7 +95,7 @@ Troubleshooting hints:
       docker compose -p hookah-platform -f infrastructure/docker-compose.yml down
 
   - If migrations fail, reset volumes and retry:
-      corepack pnpm local:down -- --volumes
+      corepack pnpm local:down:volumes
       corepack pnpm local:up
 HINTS
   exit "$exit_code"

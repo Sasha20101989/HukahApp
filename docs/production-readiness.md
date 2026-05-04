@@ -36,3 +36,30 @@
 - Tenant isolation tests do not exist.
 - Kubernetes manifests are not production complete.
 - CI/CD does not yet publish and deploy all service images.
+
+## Redis Usage Map
+
+Redis is used via `IDistributedCache` (StackExchange.Redis when `Redis:Enabled=true`, otherwise in-memory).
+
+- Auth refresh sessions:
+  - Key: `auth:refresh:{tokenHash}`
+  - TTL: refresh token TTL (typically 30 days)
+  - Source: `auth-service`
+- Booking availability cache:
+  - Key: `booking:availability:{branchId}:{date}:{time}:{guestsCount}`
+  - TTL: 10 seconds
+  - Source: `booking-service`
+- Booking holds (temporary time locks during client checkout):
+  - Keys: `booking:hold:*` (see `booking-service` for exact key formats)
+  - TTL: 10 minutes (hold expires automatically)
+  - Source: `booking-service`
+- Coal timer state:
+  - Key: `order:{orderId}:coal-timer`
+  - TTL: 4 hours
+  - Source: `order-service`
+- CRM fast runtime state (active orders per branch):
+  - Keys:
+    - `crm:branch:{branchId}:active-orders` (index)
+    - `crm:order:{orderId}:state` (per-order state)
+  - TTL: 12 hours
+  - Source: `order-service`
