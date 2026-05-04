@@ -31,6 +31,7 @@ Useful variants:
 corepack pnpm local:up:logs
 corepack pnpm local:reset
 corepack pnpm local:down
+corepack pnpm local:down:volumes
 ```
 
 Public URLs:

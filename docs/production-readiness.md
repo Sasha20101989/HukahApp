@@ -10,6 +10,8 @@
 - Backend build: `dotnet build backend/HookahPlatform.sln --no-restore -m:1 /nr:false`
 - Frontend build: `corepack pnpm frontend:build`
 - Local stack: `corepack pnpm local:up`
+- Stop stack (keep volumes): `corepack pnpm local:down`
+- Stop stack (drop volumes): `corepack pnpm local:down:volumes`
 
 ## Smoke Flow
 
