@@ -17,6 +17,13 @@ try {
     assert(accessToken, "access token was not returned");
   });
 
+  await step("tenant foundation exists (demo tenant)", async () => {
+    const tenants = await api("GET", "/api/tenants");
+    assert(Array.isArray(tenants), "tenants response must be an array");
+    const demo = tenants.find((t) => (t.slug ?? "").toLowerCase() === "demo");
+    assert(demo && demo.id, "demo tenant was not found (expected slug 'demo')");
+  });
+
   if (!clientId) {
     clientId = await step("auth register smoke client", async () => {
       const phone = `+7222${runId.slice(-7)}`;
