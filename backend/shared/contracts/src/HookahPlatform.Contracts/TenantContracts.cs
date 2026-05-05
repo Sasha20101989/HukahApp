@@ -31,6 +31,18 @@ public sealed record TenantExportDto(
     TenantSettingsDto? Settings,
     DateTimeOffset ExportedAt);
 
+public sealed record AuditLogDto(
+    Guid Id,
+    Guid? TenantId,
+    Guid? ActorUserId,
+    string Action,
+    string TargetType,
+    string? TargetId,
+    string Result,
+    string? CorrelationId,
+    string? MetadataJson,
+    DateTimeOffset CreatedAt);
+
 public sealed record CreateTenantRequest(
     string Slug,
     string Name);

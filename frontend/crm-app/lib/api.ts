@@ -8,6 +8,7 @@ export type TenantRole = { id: string; name: string; code: string; isSystem: boo
 export type UserProfile = { id: string; name: string; phone: string; email?: string | null; role: RoleCode; branchId?: string | null; status: string };
 export type Tenant = { id: string; slug: string; name: string; isActive: boolean; createdAt: string };
 export type TenantSettings = { tenantId: string; defaultTimezone: string; defaultCurrency: string; requireDeposit: boolean };
+export type AuditLog = { id: string; tenantId?: string | null; actorUserId?: string | null; action: string; targetType: string; targetId?: string | null; result: string; correlationId?: string | null; metadataJson?: string | null; createdAt: string };
 export type Branch = { id: string; name: string; address: string; phone: string; timezone: string; isActive: boolean };
 export type BranchWorkingHours = { branchId: string; dayOfWeek: number; opensAt: string; closesAt: string; isClosed: boolean };
 export type FloorPlan = { branchId: string; halls: Hall[]; zones: Zone[]; tables: Table[] };
@@ -70,6 +71,15 @@ export function getTenantSettings(id: string, accessToken?: string) {
 
 export function updateTenantSettings(id: string, payload: TenantSettings, accessToken?: string) {
   return putJson<TenantSettings>(`/api/tenants/${id}/settings`, payload, accessToken);
+}
+
+export function getAuditLogs(query: { action?: string; targetType?: string; actorUserId?: string; limit?: number }, accessToken?: string) {
+  const params = new URLSearchParams();
+  if (query.action) params.set("action", query.action);
+  if (query.targetType) params.set("targetType", query.targetType);
+  if (query.actorUserId) params.set("actorUserId", query.actorUserId);
+  if (query.limit) params.set("limit", String(query.limit));
+  return getJson<AuditLog[]>(`/api/audit-logs?${params.toString()}`, accessToken);
 }
 
 export function getRoles(accessToken?: string) {

@@ -55,7 +55,7 @@ export default function RoleAdminPage() {
       <aside className="sidebar">
         <div className="brand"><span className="brand-mark"><Flame size={20} /></span><span>Hookah CRM</span></div>
         <div className="role-card"><span><ShieldCheck size={15} /> Admin console</span><strong>{session.profile?.name}</strong><small>{role}</small><button className="ghost" onClick={handleLogout}><LogOut size={15} />Выйти</button></div>
-        <nav className="nav" aria-label="Admin sections"><a className="admin-link" href="/"><Flame size={18} />CRM</a><a className="admin-link" href="/admin/tenants">Тенанты</a><a className="admin-link" href="/admin/roles"><UserCog size={18} />Роли</a></nav>
+        <nav className="nav" aria-label="Admin sections"><a className="admin-link" href="/"><Flame size={18} />CRM</a><a className="admin-link" href="/admin/tenants">Тенанты</a><a className="admin-link" href="/admin/roles"><UserCog size={18} />Роли</a><a className="admin-link" href="/admin/audit">Audit</a></nav>
       </aside>
       <section className="main">
         <header className="topbar"><div className="title"><h1>Role Editor</h1><p>Создание tenant-scoped ролей и назначение permissions. OWNER остается системной wildcard-ролью.</p></div></header>

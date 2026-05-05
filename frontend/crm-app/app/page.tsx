@@ -127,7 +127,7 @@ export default function CrmDashboard() {
       <aside className="sidebar">
         <div className="brand"><span className="brand-mark"><Flame size={20} /></span><span>Hookah CRM</span></div>
         <div className="role-card"><span><ShieldCheck size={15} /> Сессия</span><strong>{session.profile?.name}</strong><small>{role}</small><button className="ghost" onClick={handleLogout}><LogOut size={15} />Выйти</button></div>
-        <nav className="nav" aria-label="CRM sections">{allowedSections.map((item) => <button className={section === item.id ? "active" : ""} onClick={() => setSection(item.id)} key={item.id}>{item.icon}{item.label}</button>)}{hasPermission(role, "tenants.manage") && <a className="admin-link" href="/admin/tenants"><Building2 size={18} />Тенанты</a>}{role === "OWNER" && <a className="admin-link" href="/admin/roles">Роли</a>}</nav>
+        <nav className="nav" aria-label="CRM sections">{allowedSections.map((item) => <button className={section === item.id ? "active" : ""} onClick={() => setSection(item.id)} key={item.id}>{item.icon}{item.label}</button>)}{hasPermission(role, "tenants.manage") && <a className="admin-link" href="/admin/tenants"><Building2 size={18} />Тенанты</a>}{role === "OWNER" && <a className="admin-link" href="/admin/roles">Роли</a>}{role === "OWNER" && <a className="admin-link" href="/admin/audit">Audit</a>}</nav>
       </aside>
 
       <section className="main">

@@ -8,6 +8,7 @@ public sealed class TenantDbContext : DbContext
 
     public DbSet<TenantRecord> Tenants => Set<TenantRecord>();
     public DbSet<TenantSettingsRecord> TenantSettings => Set<TenantSettingsRecord>();
+    public DbSet<AuditLogRecord> AuditLogs => Set<AuditLogRecord>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -36,6 +37,19 @@ public sealed class TenantDbContext : DbContext
                 .WithOne()
                 .HasForeignKey<TenantSettingsRecord>(x => x.TenantId);
         });
+
+        modelBuilder.Entity<AuditLogRecord>(entity =>
+        {
+            entity.ToTable("audit_logs");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.TenantId).HasColumnName("tenant_id");
+            entity.Property(x => x.ActorUserId).HasColumnName("actor_user_id");
+            entity.Property(x => x.TargetType).HasColumnName("target_type");
+            entity.Property(x => x.TargetId).HasColumnName("target_id");
+            entity.Property(x => x.CorrelationId).HasColumnName("correlation_id");
+            entity.Property(x => x.MetadataJson).HasColumnName("metadata_json").HasColumnType("jsonb");
+            entity.Property(x => x.CreatedAt).HasColumnName("created_at");
+        });
     }
 }
 
@@ -56,3 +70,16 @@ public sealed class TenantSettingsRecord
     public bool RequireDeposit { get; set; }
 }
 
+public sealed class AuditLogRecord
+{
+    public Guid Id { get; set; }
+    public Guid? TenantId { get; set; }
+    public Guid? ActorUserId { get; set; }
+    public string Action { get; set; } = string.Empty;
+    public string TargetType { get; set; } = string.Empty;
+    public string? TargetId { get; set; }
+    public string Result { get; set; } = string.Empty;
+    public string? CorrelationId { get; set; }
+    public string? MetadataJson { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+}

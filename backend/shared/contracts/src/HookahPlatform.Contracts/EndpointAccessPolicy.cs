@@ -92,6 +92,7 @@ public static class EndpointAccessPolicy
         new("PATCH", "/api/promocodes", [PermissionCodes.OrdersManage]),
         new("DELETE", "/api/promocodes", [PermissionCodes.OrdersManage]),
 
+        new("GET", "/api/audit-logs", [PermissionCodes.TenantsManage]),
         new("GET", "/api/tenants", [PermissionCodes.TenantsManage]),
         new("POST", "/api/tenants", [PermissionCodes.TenantsManage]),
         new("PATCH", "/api/tenants", [PermissionCodes.TenantsManage]),

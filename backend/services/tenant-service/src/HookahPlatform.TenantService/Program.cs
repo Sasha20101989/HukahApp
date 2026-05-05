@@ -33,6 +33,31 @@ app.MapGet("/api/tenants", async (TenantDbContext db, CancellationToken cancella
     return Results.Ok(tenants.Select(x => new TenantDto(x.Id, x.Slug, x.Name, x.IsActive, x.CreatedAt)));
 });
 
+app.MapGet("/api/audit-logs", async (string? action, string? targetType, Guid? actorUserId, DateTimeOffset? from, DateTimeOffset? to, int? limit, TenantDbContext db, ITenantContext tenantContext, CancellationToken cancellationToken) =>
+{
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var take = Math.Clamp(limit ?? 100, 1, 500);
+    var query = db.AuditLogs.AsNoTracking().Where(log => log.TenantId == tenantId);
+    if (!string.IsNullOrWhiteSpace(action)) query = query.Where(log => log.Action == action.Trim());
+    if (!string.IsNullOrWhiteSpace(targetType)) query = query.Where(log => log.TargetType == targetType.Trim());
+    if (actorUserId is not null) query = query.Where(log => log.ActorUserId == actorUserId);
+    if (from is not null) query = query.Where(log => log.CreatedAt >= from);
+    if (to is not null) query = query.Where(log => log.CreatedAt <= to);
+
+    var logs = await query.OrderByDescending(log => log.CreatedAt).Take(take).Select(log => new AuditLogDto(
+        log.Id,
+        log.TenantId,
+        log.ActorUserId,
+        log.Action,
+        log.TargetType,
+        log.TargetId,
+        log.Result,
+        log.CorrelationId,
+        log.MetadataJson,
+        log.CreatedAt)).ToListAsync(cancellationToken);
+    return Results.Ok(logs);
+});
+
 app.MapGet("/api/tenants/{id:guid}", async (Guid id, TenantDbContext db, CancellationToken cancellationToken) =>
 {
     var tenant = await db.Tenants.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id, cancellationToken);

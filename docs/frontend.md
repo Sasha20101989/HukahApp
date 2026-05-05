@@ -12,6 +12,7 @@ Implemented staff workflows:
 - tablet-first operational dashboard;
 - owner-only tenant admin console at `/admin/tenants`;
 - owner-only custom role editor at `/admin/roles`;
+- owner-only audit log viewer at `/admin/audit`;
 - role switching for `OWNER`, `MANAGER`, `HOOKAH_MASTER`, `WAITER`;
 - React Query polling for branch runtime data;
 - Zustand state for selected role, section, branch and search;
@@ -41,6 +42,10 @@ The page uses the same JWT refresh flow as the CRM dashboard. It does not use de
 ### Role editor
 
 `/admin/roles` is an OWNER-only UI for tenant-scoped custom roles. It loads roles and permission definitions from strict backend APIs, creates custom roles, edits active state, assigns permission checkboxes and blocks destructive actions for system roles.
+
+### Audit log
+
+`/admin/audit` is an OWNER-only read-only viewer for tenant-scoped audit records. It supports action, target type, actor and limit filters and renders backend metadata JSON without demo fallback.
 
 ## Client app
 

@@ -19,6 +19,7 @@ Implemented service endpoints:
 - Analytics: `/api/analytics/events`, `/api/analytics/dashboard`, `/api/analytics/top-mixes`, `/api/analytics/tobacco-usage`, `/api/analytics/staff-performance`, `/api/analytics/table-load`
 - Reviews: `/api/reviews`, `/api/reviews/mixes/{mixId}/summary`, `/api/reviews/clients/{clientId}`
 - Promo: `/api/promocodes`, `/api/promocodes/{code}`, `/api/promocodes/validate`, `/api/promocodes/redeem`, `/api/promocodes/{code}/deactivate`
+- Audit: `/api/audit-logs`
 
 All services also expose `/health`, `/events/debug`, `/outbox/debug`, `/outbox/dispatch` and `/persistence/health`.
 
@@ -52,6 +53,12 @@ Tenant notification channel management:
 - `PUT /api/notifications/channels/{channel}` upserts encrypted channel settings for the current tenant.
 - Notification templates, preferences and notifications are filtered by current tenant.
 - Notification Service records delivery audit rows in `notification_deliveries` for stored and skipped deliveries.
+
+Tenant audit log:
+
+- `GET /api/audit-logs` returns recent tenant-scoped audit records for OWNER/`tenants.manage`.
+- Supported filters: `action`, `targetType`, `actorUserId`, `from`, `to`, `limit`.
+- CRM exposes the read-only viewer at `/admin/audit`.
 
 Client-owned flows have additional service-side checks: clients can only read/create their own bookings, create payments for themselves and read their own user permission/eligibility data unless their role has the required staff permission.
 
