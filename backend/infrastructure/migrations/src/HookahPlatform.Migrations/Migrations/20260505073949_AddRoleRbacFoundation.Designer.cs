@@ -2,6 +2,7 @@
 using HookahPlatform.Migrations;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -10,9 +11,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace HookahPlatform.Migrations.Migrations
 {
     [DbContext(typeof(HookahPlatformMigrationDbContext))]
-    partial class HookahPlatformMigrationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260505073949_AddRoleRbacFoundation")]
+    partial class AddRoleRbacFoundation
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

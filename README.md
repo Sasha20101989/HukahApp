@@ -29,6 +29,7 @@ Useful variants:
 
 ```bash
 corepack pnpm local:up:logs
+corepack pnpm local:up:nocache
 corepack pnpm local:reset
 corepack pnpm local:down
 corepack pnpm local:down:volumes

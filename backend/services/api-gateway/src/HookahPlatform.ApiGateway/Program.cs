@@ -2,7 +2,9 @@ using HookahPlatform.BuildingBlocks;
 using HookahPlatform.BuildingBlocks.Security;
 using HookahPlatform.BuildingBlocks.Tenancy;
 using HookahPlatform.Contracts;
+using Microsoft.Extensions.Caching.Distributed;
 using System.Net.Http.Headers;
+using System.Text.Json;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.AddHookahServiceDefaults("api-gateway");
@@ -25,7 +27,12 @@ app.MapGet("/api/catalog/routes", () => Results.Ok(ServiceCatalog.Routes.Select(
     Upstream = $"{routes[route.PathPrefix]}{route.PathPrefix}"
 })));
 
-app.Map("/{**path}", async (HttpContext context, IHttpClientFactory httpClientFactory, JwtTokenService jwtTokens, CancellationToken cancellationToken) =>
+app.Map("/{**path}", async (
+    HttpContext context,
+    IHttpClientFactory httpClientFactory,
+    IDistributedCache cache,
+    JwtTokenService jwtTokens,
+    CancellationToken cancellationToken) =>
 {
     var requestPath = context.Request.Path.Value ?? string.Empty;
     var method = context.Request.Method;
@@ -47,6 +54,18 @@ app.Map("/{**path}", async (HttpContext context, IHttpClientFactory httpClientFa
         return;
     }
 
+    // Tenant routing is resolved at the gateway boundary.
+    // For now:
+    // - If caller provides `X-Tenant-Id`, forward it.
+    // - Otherwise, default to demo tenant for local/dev compatibility.
+    var forwardedTenantId = context.Request.Headers.TryGetValue(TenantHeaders.TenantId, out var tenantIdHeader) && !string.IsNullOrWhiteSpace(tenantIdHeader)
+        ? tenantIdHeader.ToString()
+        : TenantConstants.DemoTenantId.ToString();
+
+    var forwardedTenantSlug = context.Request.Headers.TryGetValue(TenantHeaders.TenantSlug, out var tenantSlugHeader) && !string.IsNullOrWhiteSpace(tenantSlugHeader)
+        ? tenantSlugHeader.ToString()
+        : TenantConstants.DemoTenantSlug;
+
     JwtPrincipal? principal = null;
     var authorization = context.Request.Headers.Authorization.ToString();
     if (authorization.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
@@ -56,6 +75,33 @@ app.Map("/{**path}", async (HttpContext context, IHttpClientFactory httpClientFa
         {
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
             await context.Response.WriteAsJsonAsync(new { code = "invalid_token", message = "Access token is invalid or expired." }, cancellationToken);
+            return;
+        }
+    }
+
+    IReadOnlyCollection<string>? resolvedPermissions = null;
+    if (principal is not null)
+    {
+        var userServiceBaseUrl = builder.Configuration["Services:user-service:BaseUrl"] ?? "http://user-service:8080";
+        var internalServiceSecret = builder.Configuration["Security:InternalServiceSecret"];
+        resolvedPermissions = await ResolvePermissionsForRequestAsync(
+            httpClientFactory,
+            cache,
+            userServiceBaseUrl,
+            internalServiceSecret,
+            forwardedTenantId,
+            forwardedTenantSlug,
+            principal.UserId,
+            cancellationToken);
+
+        if (resolvedPermissions is null)
+        {
+            context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            await context.Response.WriteAsJsonAsync(new
+            {
+                code = "authz_unavailable",
+                message = "Authorization service is unavailable. Please retry."
+            }, cancellationToken);
             return;
         }
     }
@@ -70,7 +116,21 @@ app.Map("/{**path}", async (HttpContext context, IHttpClientFactory httpClientFa
             return;
         }
 
-        if (!EndpointAccessPolicy.HasAnyPermission(principal.Role, requiredPermissions))
+        // Strict: do not fail open if we cannot resolve permissions from user-service.
+        if (resolvedPermissions is null)
+        {
+            context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            await context.Response.WriteAsJsonAsync(new
+            {
+                code = "authz_unavailable",
+                message = "Authorization service is unavailable. Please retry."
+            }, cancellationToken);
+            return;
+        }
+
+        if (requiredPermissions.Count > 0 &&
+            !resolvedPermissions.Contains("*", StringComparer.OrdinalIgnoreCase) &&
+            !requiredPermissions.Any(rp => resolvedPermissions.Contains(rp, StringComparer.OrdinalIgnoreCase)))
         {
             context.Response.StatusCode = StatusCodes.Status403Forbidden;
             await context.Response.WriteAsJsonAsync(new
@@ -112,24 +172,12 @@ app.Map("/{**path}", async (HttpContext context, IHttpClientFactory httpClientFa
 
     if (principal is not null)
     {
-        var permissions = RolePermissionCatalog.GetPermissions(principal.Role);
+        var permissions = resolvedPermissions ?? Array.Empty<string>();
         upstreamRequest.Headers.Add(ServiceAccessControl.UserIdHeader, principal.UserId.ToString());
         upstreamRequest.Headers.Add(ServiceAccessControl.UserRoleHeader, principal.Role);
         upstreamRequest.Headers.Add(ServiceAccessControl.UserPermissionsHeader, string.Join(",", permissions));
         upstreamRequest.Headers.Add(ServiceAccessControl.GatewaySecretHeader, builder.Configuration["Security:GatewaySecret"] ?? "local-gateway-secret-change-me");
     }
-
-    // Tenant routing is resolved at the gateway boundary.
-    // For now:
-    // - If caller provides `X-Tenant-Id`, forward it.
-    // - Otherwise, default to demo tenant for local/dev compatibility.
-    var forwardedTenantId = context.Request.Headers.TryGetValue(TenantHeaders.TenantId, out var tenantIdHeader) && !string.IsNullOrWhiteSpace(tenantIdHeader)
-        ? tenantIdHeader.ToString()
-        : TenantConstants.DemoTenantId.ToString();
-
-    var forwardedTenantSlug = context.Request.Headers.TryGetValue(TenantHeaders.TenantSlug, out var tenantSlugHeader) && !string.IsNullOrWhiteSpace(tenantSlugHeader)
-        ? tenantSlugHeader.ToString()
-        : TenantConstants.DemoTenantSlug;
 
     upstreamRequest.Headers.Remove(TenantHeaders.TenantId);
     upstreamRequest.Headers.Remove(TenantHeaders.TenantSlug);
@@ -154,6 +202,86 @@ app.Map("/{**path}", async (HttpContext context, IHttpClientFactory httpClientFa
 });
 
 app.Run();
+
+static async Task<IReadOnlyCollection<string>?> ResolvePermissionsForRequestAsync(
+    IHttpClientFactory httpClientFactory,
+    IDistributedCache cache,
+    string userServiceBaseUrl,
+    string? internalServiceSecret,
+    string forwardedTenantId,
+    string forwardedTenantSlug,
+    Guid userId,
+    CancellationToken cancellationToken)
+{
+    if (string.IsNullOrWhiteSpace(internalServiceSecret))
+    {
+        return null;
+    }
+
+    var cacheKey = $"t:{forwardedTenantId}:authz:user:{userId}:perms";
+    var cached = await cache.GetStringAsync(cacheKey, cancellationToken);
+    if (!string.IsNullOrWhiteSpace(cached))
+    {
+        return cached
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToArray();
+    }
+
+    var upstream = new UriBuilder(userServiceBaseUrl)
+    {
+        Path = $"/api/users/{userId}/permissions"
+    }.Uri;
+
+    using var request = new HttpRequestMessage(HttpMethod.Get, upstream);
+    request.Headers.TryAddWithoutValidation(TenantHeaders.TenantId, forwardedTenantId);
+    request.Headers.TryAddWithoutValidation(TenantHeaders.TenantSlug, forwardedTenantSlug);
+    request.Headers.TryAddWithoutValidation(ServiceAccessControl.ServiceNameHeader, "api-gateway");
+    request.Headers.TryAddWithoutValidation(ServiceAccessControl.ServiceSecretHeader, internalServiceSecret);
+
+    var client = httpClientFactory.CreateClient("gateway-authz");
+    using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+    if (!response.IsSuccessStatusCode)
+    {
+        return null;
+    }
+
+    try
+    {
+        var payload = await response.Content.ReadAsStringAsync(cancellationToken);
+        using var doc = JsonDocument.Parse(payload);
+        var root = doc.RootElement;
+
+        if (!root.TryGetProperty("userId", out var userIdProp)) return null;
+        var userIdText = userIdProp.ValueKind == JsonValueKind.String ? userIdProp.GetString() : userIdProp.ToString();
+        if (!Guid.TryParse(userIdText, out var parsedUserId) || parsedUserId == Guid.Empty) return null;
+        if (parsedUserId != userId) return null;
+
+        if (!root.TryGetProperty("permissions", out var permissionsProp) || permissionsProp.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        var permissions = permissionsProp
+            .EnumerateArray()
+            .Select(p => p.ValueKind == JsonValueKind.String ? p.GetString() : p.ToString())
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .Select(p => p!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        await cache.SetStringAsync(
+            cacheKey,
+            string.Join(",", permissions),
+            new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(60) },
+            cancellationToken);
+
+        return permissions;
+    }
+    catch
+    {
+        return null;
+    }
+}
 
 static void StripSecurityForwardingHeaders(HttpRequestMessage request)
 {

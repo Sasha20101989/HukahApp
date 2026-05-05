@@ -8,6 +8,7 @@
   ],
   "scripts": {
     "local:up": "bash scripts/local-up.sh",
+    "local:up:nocache": "bash scripts/local-up.sh --no-cache",
     "local:up:logs": "bash scripts/local-up.sh --logs",
     "local:reset": "bash scripts/local-up.sh --reset",
     "local:down": "bash scripts/local-down.sh",
@@ -18,6 +19,7 @@
     "frontend:build": "corepack pnpm --dir frontend/crm-app build && corepack pnpm --dir frontend/client-app build",
     "frontend:smoke": "node scripts/frontend-smoke.mjs",
     "frontend:browser-smoke": "node scripts/browser-smoke.mjs",
-    "api:crud-smoke": "node scripts/api-crud-smoke.mjs"
+    "api:crud-smoke": "node scripts/api-crud-smoke.mjs",
+    "tenant:isolation-smoke": "node scripts/tenant-isolation-smoke.mjs"
   }
 }

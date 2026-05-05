@@ -45,6 +45,10 @@ app.MapPost("/api/auth/register", async (RegisterRequest request, AuthDbContext 
         UpdatedAt = DateTimeOffset.UtcNow
     };
     db.Users.Add(user);
+    // User.Id is client-generated GUID, so EF may treat it as "already exists" and try to insert
+    // dependent rows (refresh_tokens) first. Persist the user first to satisfy FK constraints.
+    await db.SaveChangesAsync(cancellationToken);
+
     var issuedTokens = IssueTokens(user.Id, role.Code, tokens);
     var refreshToken = CreateRefreshToken(user.Id, issuedTokens.RefreshToken);
     db.RefreshTokens.Add(refreshToken);

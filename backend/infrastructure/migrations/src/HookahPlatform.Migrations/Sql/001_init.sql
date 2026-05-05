@@ -484,7 +484,8 @@ insert into permissions(id, code, description) values
     ('02000000-0000-0000-0000-000000000005', 'orders.manage', 'Manage hookah orders'),
     ('02000000-0000-0000-0000-000000000006', 'bookings.manage', 'Manage bookings'),
     ('02000000-0000-0000-0000-000000000007', 'analytics.read', 'Read analytics dashboards'),
-    ('02000000-0000-0000-0000-000000000008', 'bookings.create', 'Create client bookings')
+    ('02000000-0000-0000-0000-000000000008', 'bookings.create', 'Create client bookings'),
+    ('02000000-0000-0000-0000-000000000009', 'tenants.manage', 'Manage SaaS tenants and tenant settings')
 on conflict (code) do nothing;
 
 insert into role_permissions(role_id, permission_id)

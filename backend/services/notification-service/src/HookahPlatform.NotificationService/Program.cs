@@ -148,7 +148,17 @@ app.MapPost("/api/notifications/send", async (SendNotificationRequest request, N
     var title = request.Title.Trim();
     var message = request.Message.Trim();
     if (!await NotificationEventProcessor.ChannelIsAllowedAsync(request.UserId, channel, db, cancellationToken)) return HttpResults.Validation($"Channel '{channel}' is disabled for this user.");
-    var notification = new NotificationEntity { Id = Guid.NewGuid(), UserId = request.UserId, Channel = channel, Title = title, Message = message, Metadata = JsonSerializer.Serialize(request.Metadata ?? new Dictionary<string, string>()), CreatedAt = DateTimeOffset.UtcNow, ReadAt = null };
+    var notification = new NotificationEntity
+    {
+        Id = Guid.NewGuid(),
+        UserId = request.UserId,
+        Channel = channel,
+        Title = title,
+        Message = message,
+        Metadata = JsonDocument.Parse(JsonSerializer.Serialize(request.Metadata ?? new Dictionary<string, string>())),
+        CreatedAt = DateTimeOffset.UtcNow,
+        ReadAt = null
+    };
     db.Notifications.Add(notification);
     await db.SaveChangesAsync(cancellationToken);
     return Results.Created($"/api/notifications/{notification.Id}", notification);
@@ -242,7 +252,17 @@ static class NotificationEventProcessor
         foreach (var userId in userIds)
         {
             if (!await ChannelIsAllowedAsync(userId, template.Channel, db, cancellationToken)) continue;
-            var notification = new NotificationEntity { Id = Guid.NewGuid(), UserId = userId, Channel = template.Channel, Title = Render(template.Title, request.Values), Message = Render(template.Message, request.Values), Metadata = JsonSerializer.Serialize(request.Values), CreatedAt = DateTimeOffset.UtcNow, ReadAt = null };
+            var notification = new NotificationEntity
+            {
+                Id = Guid.NewGuid(),
+                UserId = userId,
+                Channel = template.Channel,
+                Title = Render(template.Title, request.Values),
+                Message = Render(template.Message, request.Values),
+                Metadata = JsonDocument.Parse(JsonSerializer.Serialize(request.Values)),
+                CreatedAt = DateTimeOffset.UtcNow,
+                ReadAt = null
+            };
             db.Notifications.Add(notification);
             created.Add(notification);
         }
@@ -402,48 +422,63 @@ sealed class NotificationRabbitMqConsumer(IServiceScopeFactory scopeFactory, ICo
         if (!_enabled) return;
 
         var factory = CreateFactory(configuration);
-        await using var connection = await factory.CreateConnectionAsync(stoppingToken);
-        await using var channel = await connection.CreateChannelAsync(cancellationToken: stoppingToken);
-        await channel.ExchangeDeclareAsync(_exchange, ExchangeType.Topic, durable: true, autoDelete: false, cancellationToken: stoppingToken);
-        await channel.QueueDeclareAsync(_queue, durable: true, exclusive: false, autoDelete: false, arguments: new Dictionary<string, object?> { ["x-dead-letter-exchange"] = MessagingCatalog.DeadLetterExchange }, cancellationToken: stoppingToken);
-        foreach (var routingKey in new[] { "booking.*", "payment.*", "inventory.low-stock-detected", "order.served" })
-        {
-            await channel.QueueBindAsync(_queue, _exchange, routingKey, cancellationToken: stoppingToken);
-        }
-
-        var consumer = new AsyncEventingBasicConsumer(channel);
-        consumer.ReceivedAsync += async (_, args) =>
+        while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                var eventName = args.BasicProperties.Type;
-                if (string.IsNullOrWhiteSpace(eventName) && args.BasicProperties.Headers?.TryGetValue("event_name", out var header) == true) eventName = ReadHeaderAsString(header);
-                var message = new OutboxMessage { EventName = eventName ?? string.Empty, Payload = Encoding.UTF8.GetString(args.Body.Span) };
-                var integrationEvent = OutboxMessageSerializer.Deserialize(message);
-                var request = integrationEvent is null ? null : NotificationEventProcessor.ToRequest(integrationEvent);
-                if (integrationEvent is null) throw new InvalidOperationException($"Invalid notification event '{eventName}'.");
-                if (request is null)
+                await using var connection = await factory.CreateConnectionAsync(stoppingToken);
+                await using var channel = await connection.CreateChannelAsync(cancellationToken: stoppingToken);
+                await channel.ExchangeDeclareAsync(_exchange, ExchangeType.Topic, durable: true, autoDelete: false, cancellationToken: stoppingToken);
+                await channel.QueueDeclareAsync(_queue, durable: true, exclusive: false, autoDelete: false, arguments: new Dictionary<string, object?> { ["x-dead-letter-exchange"] = MessagingCatalog.DeadLetterExchange }, cancellationToken: stoppingToken);
+                foreach (var routingKey in new[] { "booking.*", "payment.*", "inventory.low-stock-detected", "order.served" })
                 {
-                    logger.LogDebug("Skipping unsupported notification event '{EventName}'.", eventName);
-                    await channel.BasicAckAsync(args.DeliveryTag, multiple: false, cancellationToken: args.CancellationToken);
-                    return;
+                    await channel.QueueBindAsync(_queue, _exchange, routingKey, cancellationToken: stoppingToken);
                 }
-                using var scope = scopeFactory.CreateScope();
-                var db = scope.ServiceProvider.GetRequiredService<NotificationDbContext>();
-                var httpClientFactory = scope.ServiceProvider.GetRequiredService<IHttpClientFactory>();
-                var result = await NotificationEventProcessor.ApplyAsync(request, db, httpClientFactory, configuration, args.CancellationToken);
-                if (result is IStatusCodeHttpResult { StatusCode: >= 400 }) throw new InvalidOperationException($"Notification event '{eventName}' was rejected.");
-                await channel.BasicAckAsync(args.DeliveryTag, multiple: false, cancellationToken: args.CancellationToken);
+
+                var consumer = new AsyncEventingBasicConsumer(channel);
+                consumer.ReceivedAsync += async (_, args) =>
+                {
+                    try
+                    {
+                        var eventName = args.BasicProperties.Type;
+                        if (string.IsNullOrWhiteSpace(eventName) && args.BasicProperties.Headers?.TryGetValue("event_name", out var header) == true) eventName = ReadHeaderAsString(header);
+                        var message = new OutboxMessage { EventName = eventName ?? string.Empty, Payload = Encoding.UTF8.GetString(args.Body.Span) };
+                        var integrationEvent = OutboxMessageSerializer.Deserialize(message);
+                        var request = integrationEvent is null ? null : NotificationEventProcessor.ToRequest(integrationEvent);
+                        if (integrationEvent is null) throw new InvalidOperationException($"Invalid notification event '{eventName}'.");
+                        if (request is null)
+                        {
+                            logger.LogDebug("Skipping unsupported notification event '{EventName}'.", eventName);
+                            await channel.BasicAckAsync(args.DeliveryTag, multiple: false, cancellationToken: args.CancellationToken);
+                            return;
+                        }
+                        using var scope = scopeFactory.CreateScope();
+                        var db = scope.ServiceProvider.GetRequiredService<NotificationDbContext>();
+                        var httpClientFactory = scope.ServiceProvider.GetRequiredService<IHttpClientFactory>();
+                        var result = await NotificationEventProcessor.ApplyAsync(request, db, httpClientFactory, configuration, args.CancellationToken);
+                        if (result is IStatusCodeHttpResult { StatusCode: >= 400 }) throw new InvalidOperationException($"Notification event '{eventName}' was rejected.");
+                        await channel.BasicAckAsync(args.DeliveryTag, multiple: false, cancellationToken: args.CancellationToken);
+                    }
+                    catch (Exception exception)
+                    {
+                        logger.LogWarning(exception, "RabbitMQ notification event handling failed.");
+                        await channel.BasicNackAsync(args.DeliveryTag, multiple: false, requeue: false, cancellationToken: args.CancellationToken);
+                    }
+                };
+
+                await channel.BasicConsumeAsync(_queue, autoAck: false, consumer, cancellationToken: stoppingToken);
+                await Task.Delay(Timeout.InfiniteTimeSpan, stoppingToken);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                return;
             }
             catch (Exception exception)
             {
-                logger.LogWarning(exception, "RabbitMQ notification event handling failed.");
-                await channel.BasicNackAsync(args.DeliveryTag, multiple: false, requeue: false, cancellationToken: args.CancellationToken);
+                logger.LogWarning(exception, "RabbitMQ connection failed (host={Host}). Retrying...", configuration["RabbitMQ:HostName"] ?? "localhost");
+                await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken);
             }
-        };
-
-        await channel.BasicConsumeAsync(_queue, autoAck: false, consumer, cancellationToken: stoppingToken);
-        await Task.Delay(Timeout.InfiniteTimeSpan, stoppingToken);
+        }
     }
 
     private static ConnectionFactory CreateFactory(IConfiguration configuration) => new()

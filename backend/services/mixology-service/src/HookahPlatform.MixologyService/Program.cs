@@ -1,5 +1,6 @@
 using HookahPlatform.BuildingBlocks;
 using HookahPlatform.BuildingBlocks.Persistence;
+using HookahPlatform.BuildingBlocks.Tenancy;
 using HookahPlatform.Contracts;
 using HookahPlatform.MixologyService.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -92,9 +93,10 @@ app.MapDelete("/api/tobaccos/{id:guid}", async (Guid id, MixologyDbContext db, C
     return Results.NoContent();
 });
 
-app.MapGet("/api/mixes", async (string? strength, string? tasteProfile, Guid? bowlId, bool? availableOnly, Guid? branchId, bool? publicOnly, MixologyDbContext db, IHttpClientFactory httpClientFactory, IConfiguration configuration, CancellationToken cancellationToken) =>
+app.MapGet("/api/mixes", async (string? strength, string? tasteProfile, Guid? bowlId, bool? availableOnly, Guid? branchId, bool? publicOnly, MixologyDbContext db, ITenantContext tenantContext, IHttpClientFactory httpClientFactory, IConfiguration configuration, CancellationToken cancellationToken) =>
 {
-    var query = db.Mixes.AsNoTracking().Where(mix => mix.IsActive);
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var query = db.Mixes.AsNoTracking().Where(mix => mix.IsActive && mix.TenantId == tenantId);
     if (!string.IsNullOrWhiteSpace(strength)) query = query.Where(mix => mix.Strength == strength);
     if (!string.IsNullOrWhiteSpace(tasteProfile)) query = query.Where(mix => mix.TasteProfile == tasteProfile);
     if (bowlId is not null) query = query.Where(mix => mix.BowlId == bowlId);
@@ -114,11 +116,12 @@ app.MapGet("/api/mixes", async (string? strength, string? tasteProfile, Guid? bo
     return publicOnly == true ? Results.Ok(mixes.Select(ToPublicMix)) : Results.Ok(mixes);
 });
 
-app.MapGet("/api/mixes/{id:guid}", async (Guid id, MixologyDbContext db, CancellationToken cancellationToken) =>
+app.MapGet("/api/mixes/{id:guid}", async (Guid id, MixologyDbContext db, ITenantContext tenantContext, CancellationToken cancellationToken) =>
 {
-    var mix = await db.Mixes.AsNoTracking().FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var mix = await db.Mixes.AsNoTracking().FirstOrDefaultAsync(candidate => candidate.Id == id && candidate.TenantId == tenantId, cancellationToken);
     if (mix is null) return HttpResults.NotFound("Mix", id);
-    var items = await db.MixItems.AsNoTracking().Where(item => item.MixId == id).OrderBy(item => item.Id).ToListAsync(cancellationToken);
+    var items = await db.MixItems.AsNoTracking().Where(item => item.MixId == id && item.TenantId == tenantId).OrderBy(item => item.Id).ToListAsync(cancellationToken);
     return Results.Ok(ToMixDto(mix, items));
 });
 
@@ -128,24 +131,29 @@ app.MapPost("/api/mixes/calculate", async (CalculateMixRequest request, Mixology
     return result.Error is not null ? HttpResults.Validation(result.Error) : Results.Ok(result.Value);
 });
 
-app.MapPost("/api/mixes", async (CreateMixRequest request, MixologyDbContext db, IEventPublisher events, CancellationToken cancellationToken) =>
+app.MapPost("/api/mixes", async (CreateMixRequest request, MixologyDbContext db, ITenantContext tenantContext, IEventPublisher events, CancellationToken cancellationToken) =>
 {
+    var tenantId = tenantContext.GetTenantIdOrDemo();
     var result = await CalculateMixAsync(request.BowlId, request.Items, db, cancellationToken);
     if (result.Error is not null || result.Value is null) return HttpResults.Validation(result.Error ?? "Mix calculation failed.");
 
     var price = request.Price ?? Math.Ceiling(result.Value.Cost * 3.2m / 10m) * 10m;
-    var mix = new MixEntity { Id = Guid.NewGuid(), Name = request.Name, Description = request.Description, BowlId = request.BowlId, Strength = request.Strength, TasteProfile = request.TasteProfile, TotalGrams = result.Value.TotalGrams, Price = price, Cost = result.Value.Cost, Margin = price - result.Value.Cost, IsPublic = request.IsPublic, IsActive = true, CreatedBy = request.CreatedBy, CreatedAt = DateTimeOffset.UtcNow };
+    var mix = new MixEntity { Id = Guid.NewGuid(), TenantId = tenantId, Name = request.Name, Description = request.Description, BowlId = request.BowlId, Strength = request.Strength, TasteProfile = request.TasteProfile, TotalGrams = result.Value.TotalGrams, Price = price, Cost = result.Value.Cost, Margin = price - result.Value.Cost, IsPublic = request.IsPublic, IsActive = true, CreatedBy = request.CreatedBy, CreatedAt = DateTimeOffset.UtcNow };
     db.Mixes.Add(mix);
+    // Mix.Id is a client-generated GUID, so EF may try to insert mix_items first.
+    // Persist the mix first to satisfy FK constraints.
+    await db.SaveChangesAsync(cancellationToken);
+
     foreach (var item in result.Value.Items)
     {
-        db.MixItems.Add(new MixItemEntity { Id = Guid.NewGuid(), MixId = mix.Id, TobaccoId = item.TobaccoId, Percent = item.Percent, Grams = item.Grams });
+        db.MixItems.Add(new MixItemEntity { Id = Guid.NewGuid(), TenantId = tenantId, MixId = mix.Id, TobaccoId = item.TobaccoId, Percent = item.Percent, Grams = item.Grams });
     }
     var created = new MixCreated(mix.Id, mix.Name, mix.BowlId, DateTimeOffset.UtcNow);
     var outboxMessage = db.AddOutboxMessage(created);
     await db.SaveChangesAsync(cancellationToken);
     await db.ForwardAndMarkOutboxAsync(events, created, outboxMessage, cancellationToken);
 
-    var items = await db.MixItems.AsNoTracking().Where(item => item.MixId == mix.Id).ToListAsync(cancellationToken);
+    var items = await db.MixItems.AsNoTracking().Where(item => item.MixId == mix.Id && item.TenantId == tenantId).ToListAsync(cancellationToken);
     return Results.Created($"/api/mixes/{mix.Id}", ToMixDto(mix, items));
 });
 
@@ -156,15 +164,16 @@ app.MapPost("/api/mixes/recommend", async (RecommendMixRequest request, Mixology
     return Results.Ok(mixes);
 });
 
-app.MapPatch("/api/mixes/{id:guid}", async (Guid id, UpdateMixRequest request, MixologyDbContext db, CancellationToken cancellationToken) =>
+app.MapPatch("/api/mixes/{id:guid}", async (Guid id, UpdateMixRequest request, MixologyDbContext db, ITenantContext tenantContext, CancellationToken cancellationToken) =>
 {
-    var mix = await db.Mixes.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var mix = await db.Mixes.FirstOrDefaultAsync(candidate => candidate.Id == id && candidate.TenantId == tenantId, cancellationToken);
     if (mix is null) return HttpResults.NotFound("Mix", id);
     if (request.BowlId is not null || request.Items is not null)
     {
         var nextBowlId = request.BowlId ?? mix.BowlId;
         var nextItems = request.Items ?? await db.MixItems.AsNoTracking()
-            .Where(item => item.MixId == id)
+            .Where(item => item.MixId == id && item.TenantId == tenantId)
             .Select(item => new MixInputItem(item.TobaccoId, item.Percent))
             .ToListAsync(cancellationToken);
         var result = await CalculateMixAsync(nextBowlId, nextItems, db, cancellationToken);
@@ -172,10 +181,10 @@ app.MapPatch("/api/mixes/{id:guid}", async (Guid id, UpdateMixRequest request, M
         mix.BowlId = nextBowlId;
         mix.TotalGrams = result.Value.TotalGrams;
         mix.Cost = result.Value.Cost;
-        db.MixItems.RemoveRange(await db.MixItems.Where(item => item.MixId == id).ToListAsync(cancellationToken));
+        db.MixItems.RemoveRange(await db.MixItems.Where(item => item.MixId == id && item.TenantId == tenantId).ToListAsync(cancellationToken));
         foreach (var item in result.Value.Items)
         {
-            db.MixItems.Add(new MixItemEntity { Id = Guid.NewGuid(), MixId = mix.Id, TobaccoId = item.TobaccoId, Percent = item.Percent, Grams = item.Grams });
+            db.MixItems.Add(new MixItemEntity { Id = Guid.NewGuid(), TenantId = tenantId, MixId = mix.Id, TobaccoId = item.TobaccoId, Percent = item.Percent, Grams = item.Grams });
         }
     }
     mix.Name = request.Name ?? mix.Name;
@@ -190,22 +199,24 @@ app.MapPatch("/api/mixes/{id:guid}", async (Guid id, UpdateMixRequest request, M
     }
     mix.Margin = mix.Price - mix.Cost;
     await db.SaveChangesAsync(cancellationToken);
-    var items = await db.MixItems.AsNoTracking().Where(item => item.MixId == mix.Id).ToListAsync(cancellationToken);
+    var items = await db.MixItems.AsNoTracking().Where(item => item.MixId == mix.Id && item.TenantId == tenantId).ToListAsync(cancellationToken);
     return Results.Ok(ToMixDto(mix, items));
 });
 
-app.MapPatch("/api/mixes/{id:guid}/visibility", async (Guid id, UpdateMixVisibilityRequest request, MixologyDbContext db, CancellationToken cancellationToken) =>
+app.MapPatch("/api/mixes/{id:guid}/visibility", async (Guid id, UpdateMixVisibilityRequest request, MixologyDbContext db, ITenantContext tenantContext, CancellationToken cancellationToken) =>
 {
-    var mix = await db.Mixes.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var mix = await db.Mixes.FirstOrDefaultAsync(candidate => candidate.Id == id && candidate.TenantId == tenantId, cancellationToken);
     if (mix is null) return HttpResults.NotFound("Mix", id);
     mix.IsPublic = request.IsPublic;
     await db.SaveChangesAsync(cancellationToken);
     return Results.Ok(mix);
 });
 
-app.MapDelete("/api/mixes/{id:guid}", async (Guid id, MixologyDbContext db, CancellationToken cancellationToken) =>
+app.MapDelete("/api/mixes/{id:guid}", async (Guid id, MixologyDbContext db, ITenantContext tenantContext, CancellationToken cancellationToken) =>
 {
-    var mix = await db.Mixes.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var mix = await db.Mixes.FirstOrDefaultAsync(candidate => candidate.Id == id && candidate.TenantId == tenantId, cancellationToken);
     if (mix is null) return HttpResults.NotFound("Mix", id);
     mix.IsActive = false;
     await db.SaveChangesAsync(cancellationToken);
@@ -218,7 +229,11 @@ static async Task<List<Mix>> LoadMixDtosAsync(IQueryable<MixEntity> query, Mixol
 {
     var mixEntities = await query.ToListAsync(cancellationToken);
     var mixIds = mixEntities.Select(mix => mix.Id).ToArray();
-    var itemGroups = await db.MixItems.AsNoTracking().Where(item => mixIds.Contains(item.MixId)).GroupBy(item => item.MixId).ToDictionaryAsync(group => group.Key, group => group.ToList(), cancellationToken);
+    var tenantIds = mixEntities.Select(mix => mix.TenantId).Distinct().ToArray();
+    var itemGroups = await db.MixItems.AsNoTracking()
+        .Where(item => mixIds.Contains(item.MixId) && tenantIds.Contains(item.TenantId))
+        .GroupBy(item => item.MixId)
+        .ToDictionaryAsync(group => group.Key, group => group.ToList(), cancellationToken);
     return mixEntities.Select(mix => ToMixDto(mix, itemGroups.TryGetValue(mix.Id, out var items) ? items : [])).ToList();
 }
 

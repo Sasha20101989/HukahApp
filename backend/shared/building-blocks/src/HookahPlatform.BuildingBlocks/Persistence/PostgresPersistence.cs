@@ -16,7 +16,8 @@ public static class PostgresPersistence
             ?? builder.Configuration["ConnectionStrings:Postgres"]
             ?? DefaultConnectionString;
 
-        builder.Services.AddDbContext<OutboxDbContext>(options => options.UseNpgsql(connectionString));
+        builder.Services.AddDbContext<OutboxDbContext>(options =>
+            options.UseNpgsql(connectionString).UseSnakeCaseNamingConvention());
         return builder;
     }
 
@@ -27,7 +28,8 @@ public static class PostgresPersistence
             ?? builder.Configuration["ConnectionStrings:Postgres"]
             ?? DefaultConnectionString;
 
-        builder.Services.AddDbContext<TContext>(options => options.UseNpgsql(connectionString));
+        builder.Services.AddDbContext<TContext>(options =>
+            options.UseNpgsql(connectionString).UseSnakeCaseNamingConvention());
         return builder;
     }
 

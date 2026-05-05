@@ -25,7 +25,14 @@ public sealed class UserDbContext(DbContextOptions<UserDbContext> options) : DbC
             entity.Property(user => user.CreatedAt).HasColumnName("created_at");
             entity.Property(user => user.UpdatedAt).HasColumnName("updated_at");
         });
-        modelBuilder.Entity<RoleEntity>().ToTable("roles").HasKey(role => role.Id);
+        modelBuilder.Entity<RoleEntity>(entity =>
+        {
+            entity.ToTable("roles");
+            entity.HasKey(role => role.Id);
+            entity.Property(role => role.TenantId).HasColumnName("tenant_id");
+            entity.Property(role => role.IsSystem).HasColumnName("is_system");
+            entity.Property(role => role.IsActive).HasColumnName("is_active");
+        });
         modelBuilder.Entity<PermissionEntity>().ToTable("permissions").HasKey(permission => permission.Id);
         modelBuilder.Entity<RolePermissionEntity>(entity =>
         {
@@ -66,7 +73,15 @@ public sealed class UserEntity
     public DateTimeOffset UpdatedAt { get; set; }
 }
 
-public sealed class RoleEntity { public Guid Id { get; set; } public string Name { get; set; } = string.Empty; public string Code { get; set; } = string.Empty; }
+public sealed class RoleEntity
+{
+    public Guid Id { get; set; }
+    public Guid TenantId { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public string Code { get; set; } = string.Empty;
+    public bool IsSystem { get; set; }
+    public bool IsActive { get; set; }
+}
 public sealed class PermissionEntity { public Guid Id { get; set; } public string Code { get; set; } = string.Empty; public string? Description { get; set; } }
 public sealed class RolePermissionEntity { public Guid RoleId { get; set; } public Guid PermissionId { get; set; } }
 public sealed class StaffShiftEntity

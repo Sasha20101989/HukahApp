@@ -1,5 +1,6 @@
 using HookahPlatform.BuildingBlocks;
 using HookahPlatform.BuildingBlocks.Persistence;
+using HookahPlatform.BuildingBlocks.Tenancy;
 using HookahPlatform.Contracts;
 using HookahPlatform.OrderService.Persistence;
 using Microsoft.Extensions.Caching.Distributed;
@@ -28,9 +29,10 @@ var allowedOrderTransitions = new Dictionary<string, string[]>(StringComparer.Or
     [OrderStatuses.Cancelled] = []
 };
 
-app.MapGet("/api/orders", async (Guid? branchId, string? status, DateOnly? date, OrderDbContext db, CancellationToken cancellationToken) =>
+app.MapGet("/api/orders", async (Guid? branchId, string? status, DateOnly? date, OrderDbContext db, ITenantContext tenantContext, CancellationToken cancellationToken) =>
 {
-    var query = db.Orders.AsNoTracking();
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var query = db.Orders.AsNoTracking().Where(order => order.TenantId == tenantId);
     if (branchId is not null) query = query.Where(order => order.BranchId == branchId);
     if (!string.IsNullOrWhiteSpace(status))
     {
@@ -44,21 +46,23 @@ app.MapGet("/api/orders", async (Guid? branchId, string? status, DateOnly? date,
 
 app.MapGet("/api/orders/status-flow", () => Results.Ok(allowedOrderTransitions.Select(rule => new { status = rule.Key, next = rule.Value })));
 
-app.MapGet("/api/orders/runtime/branch/{branchId:guid}", async (Guid branchId, IDistributedCache cache, CancellationToken cancellationToken) =>
+app.MapGet("/api/orders/runtime/branch/{branchId:guid}", async (Guid branchId, IDistributedCache cache, ITenantContext tenantContext, CancellationToken cancellationToken) =>
 {
-    var ids = await cache.GetJsonAsync<Guid[]>(ActiveOrdersIndexKey(branchId), cancellationToken) ?? [];
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var ids = await cache.GetJsonAsync<Guid[]>(ActiveOrdersIndexKey(tenantId, branchId), cancellationToken) ?? [];
     var orders = new List<ActiveOrderRuntimeState>();
     foreach (var id in ids)
     {
-        var state = await cache.GetJsonAsync<ActiveOrderRuntimeState>(ActiveOrderKey(id), cancellationToken);
+        var state = await cache.GetJsonAsync<ActiveOrderRuntimeState>(ActiveOrderKey(tenantId, id), cancellationToken);
         if (state is not null && state.BranchId == branchId) orders.Add(state);
     }
     return Results.Ok(orders.OrderByDescending(order => order.UpdatedAt));
 });
 
-app.MapPost("/api/orders", async (CreateOrderRequest request, OrderDbContext db, IEventPublisher events, IHttpClientFactory httpClientFactory, IConfiguration configuration, IDistributedCache cache, CancellationToken cancellationToken) =>
+app.MapPost("/api/orders", async (CreateOrderRequest request, OrderDbContext db, ITenantContext tenantContext, IEventPublisher events, IHttpClientFactory httpClientFactory, IConfiguration configuration, IDistributedCache cache, CancellationToken cancellationToken) =>
 {
     if (request.MixId == Guid.Empty || request.BowlId == Guid.Empty || request.HookahId == Guid.Empty) return HttpResults.Validation("Hookah, bowl and mix are required.");
+    var tenantId = tenantContext.GetTenantIdOrDemo();
 
     var resourceCheck = await CheckResourcesAvailableAsync(request.TableId, request.HookahId, httpClientFactory, configuration, cancellationToken);
     if (!resourceCheck.IsAvailable) return Results.Conflict(new { code = "resource_unavailable", message = resourceCheck.Message });
@@ -75,8 +79,8 @@ app.MapPost("/api/orders", async (CreateOrderRequest request, OrderDbContext db,
 
     var orderId = Guid.NewGuid();
     var price = request.Price ?? 850m;
-    var order = new OrderEntity { Id = orderId, BranchId = request.BranchId, TableId = request.TableId, ClientId = request.ClientId, HookahMasterId = null, WaiterId = request.WaiterId, BookingId = request.BookingId, Status = OrderStatuses.New, TotalPrice = price, Comment = request.Comment, CreatedAt = DateTimeOffset.UtcNow, ServedAt = null, CompletedAt = null, InventoryWrittenOffAt = null, PaymentId = null, PaidAmount = 0, PaidAt = null };
-    var item = new OrderItemEntity { Id = Guid.NewGuid(), OrderId = orderId, HookahId = request.HookahId, BowlId = request.BowlId, MixId = request.MixId, Price = price, Status = OrderStatuses.New };
+    var order = new OrderEntity { Id = orderId, TenantId = tenantId, BranchId = request.BranchId, TableId = request.TableId, ClientId = request.ClientId, HookahMasterId = null, WaiterId = request.WaiterId, BookingId = request.BookingId, Status = OrderStatuses.New, TotalPrice = price, Comment = request.Comment, CreatedAt = DateTimeOffset.UtcNow, ServedAt = null, CompletedAt = null, InventoryWrittenOffAt = null, PaymentId = null, PaidAmount = 0, PaidAt = null };
+    var item = new OrderItemEntity { Id = Guid.NewGuid(), TenantId = tenantId, OrderId = orderId, HookahId = request.HookahId, BowlId = request.BowlId, MixId = request.MixId, Price = price, Status = OrderStatuses.New };
     db.Orders.Add(order);
     db.OrderItems.Add(item);
     var created = new OrderCreated(order.Id, order.BranchId, order.TableId, order.ClientId, item.MixId, DateTimeOffset.UtcNow);
@@ -84,24 +88,26 @@ app.MapPost("/api/orders", async (CreateOrderRequest request, OrderDbContext db,
     await db.SaveChangesAsync(cancellationToken);
 
     await MarkResourcesInUseAsync(request.TableId, request.HookahId, httpClientFactory, configuration, cancellationToken);
-    await StoreActiveOrderStateAsync(cache, ToOrderDto(order, [item]), item.HookahId, null, cancellationToken);
+    await StoreActiveOrderStateAsync(cache, tenantId, ToOrderDto(order, [item]), item.HookahId, null, cancellationToken);
     await db.ForwardAndMarkOutboxAsync(events, created, outboxMessage, cancellationToken);
     return Results.Created($"/api/orders/{order.Id}", ToOrderDto(order, [item]));
 });
 
-app.MapGet("/api/orders/{id:guid}", async (Guid id, OrderDbContext db, CancellationToken cancellationToken) =>
+app.MapGet("/api/orders/{id:guid}", async (Guid id, OrderDbContext db, ITenantContext tenantContext, CancellationToken cancellationToken) =>
 {
-    var order = await db.Orders.AsNoTracking().FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var order = await db.Orders.AsNoTracking().FirstOrDefaultAsync(candidate => candidate.Id == id && candidate.TenantId == tenantId, cancellationToken);
     if (order is null) return HttpResults.NotFound("Order", id);
-    var items = await db.OrderItems.AsNoTracking().Where(item => item.OrderId == id).ToListAsync(cancellationToken);
+    var items = await db.OrderItems.AsNoTracking().Where(item => item.OrderId == id && item.TenantId == tenantId).ToListAsync(cancellationToken);
     return Results.Ok(ToOrderDto(order, items));
 });
 
-app.MapPatch("/api/orders/{id:guid}/status", async (Guid id, UpdateOrderStatusRequest request, OrderDbContext db, IEventPublisher events, IHttpClientFactory httpClientFactory, IConfiguration configuration, IDistributedCache cache, CancellationToken cancellationToken) =>
+app.MapPatch("/api/orders/{id:guid}/status", async (Guid id, UpdateOrderStatusRequest request, OrderDbContext db, ITenantContext tenantContext, IEventPublisher events, IHttpClientFactory httpClientFactory, IConfiguration configuration, IDistributedCache cache, CancellationToken cancellationToken) =>
 {
-    var order = await db.Orders.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var order = await db.Orders.FirstOrDefaultAsync(candidate => candidate.Id == id && candidate.TenantId == tenantId, cancellationToken);
     if (order is null) return HttpResults.NotFound("Order", id);
-    var items = await db.OrderItems.Where(item => item.OrderId == id).ToListAsync(cancellationToken);
+    var items = await db.OrderItems.Where(item => item.OrderId == id && item.TenantId == tenantId).ToListAsync(cancellationToken);
     var normalized = request.Status.ToUpperInvariant();
     if (!allowedOrderTransitions.ContainsKey(normalized)) return HttpResults.Validation($"Unsupported order status '{request.Status}'.");
     if (!CanTransition(order.Status, normalized, allowedOrderTransitions)) return HttpResults.Conflict($"Order status cannot transition from {order.Status} to {normalized}.");
@@ -123,18 +129,18 @@ app.MapPatch("/api/orders/{id:guid}/status", async (Guid id, UpdateOrderStatusRe
     outboxEvents.Add(new OrderStatusChanged(id, normalized, now));
     var outboxMessages = db.AddOutboxMessages(outboxEvents);
     await db.SaveChangesAsync(cancellationToken);
-    if (normalized == OrderStatuses.Served) await SetCoalTimerAsync(cache, order.Id, order.ServedAt!.Value, cancellationToken);
-    if (normalized is OrderStatuses.Completed or OrderStatuses.Cancelled) await cache.RemoveAsync(CoalTimerKey(order.Id), cancellationToken);
+    if (normalized == OrderStatuses.Served) await SetCoalTimerAsync(cache, tenantId, order.Id, order.ServedAt!.Value, cancellationToken);
+    if (normalized is OrderStatuses.Completed or OrderStatuses.Cancelled) await cache.RemoveAsync(CoalTimerKey(tenantId, order.Id), cancellationToken);
     var runtimeOrder = ToOrderDto(order, items);
     var runtimeHookahId = items.FirstOrDefault()?.HookahId;
-    var runtimeCoalTimer = await cache.GetJsonAsync<CoalTimerState>(CoalTimerKey(order.Id), cancellationToken);
+    var runtimeCoalTimer = await cache.GetJsonAsync<CoalTimerState>(CoalTimerKey(tenantId, order.Id), cancellationToken);
     if (normalized is OrderStatuses.Completed or OrderStatuses.Cancelled)
     {
-        await RemoveActiveOrderStateAsync(cache, order.BranchId, order.Id, cancellationToken);
+        await RemoveActiveOrderStateAsync(cache, tenantId, order.BranchId, order.Id, cancellationToken);
     }
     else if (runtimeHookahId is not null)
     {
-        await StoreActiveOrderStateAsync(cache, runtimeOrder, runtimeHookahId.Value, runtimeCoalTimer?.NextCoalChangeAt, cancellationToken);
+        await StoreActiveOrderStateAsync(cache, tenantId, runtimeOrder, runtimeHookahId.Value, runtimeCoalTimer?.NextCoalChangeAt, cancellationToken);
     }
     await db.ForwardAndMarkOutboxAsync(events, outboxEvents, outboxMessages, cancellationToken);
 
@@ -147,76 +153,81 @@ app.MapPatch("/api/orders/{id:guid}/status", async (Guid id, UpdateOrderStatusRe
     return Results.Ok(ToOrderDto(order, items));
 });
 
-app.MapPatch("/api/orders/{id:guid}/assign-hookah-master", async (Guid id, AssignHookahMasterRequest request, OrderDbContext db, IDistributedCache cache, CancellationToken cancellationToken) =>
+app.MapPatch("/api/orders/{id:guid}/assign-hookah-master", async (Guid id, AssignHookahMasterRequest request, OrderDbContext db, ITenantContext tenantContext, IDistributedCache cache, CancellationToken cancellationToken) =>
 {
-    var order = await db.Orders.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var order = await db.Orders.FirstOrDefaultAsync(candidate => candidate.Id == id && candidate.TenantId == tenantId, cancellationToken);
     if (order is null) return HttpResults.NotFound("Order", id);
     if (order.Status is OrderStatuses.Completed or OrderStatuses.Cancelled) return HttpResults.Conflict("Cannot assign hookah master to completed or cancelled order.");
     order.HookahMasterId = request.HookahMasterId;
     await db.SaveChangesAsync(cancellationToken);
-    var items = await db.OrderItems.AsNoTracking().Where(item => item.OrderId == id).ToListAsync(cancellationToken);
-    if (items.FirstOrDefault() is { } item) await StoreActiveOrderStateAsync(cache, ToOrderDto(order, items), item.HookahId, null, cancellationToken);
+    var items = await db.OrderItems.AsNoTracking().Where(item => item.OrderId == id && item.TenantId == tenantId).ToListAsync(cancellationToken);
+    if (items.FirstOrDefault() is { } item) await StoreActiveOrderStateAsync(cache, tenantId, ToOrderDto(order, items), item.HookahId, null, cancellationToken);
     return Results.Ok(ToOrderDto(order, items));
 });
 
-app.MapPatch("/api/orders/{id:guid}/payment-succeeded", async (Guid id, OrderPaymentSucceededRequest request, OrderDbContext db, CancellationToken cancellationToken) =>
+app.MapPatch("/api/orders/{id:guid}/payment-succeeded", async (Guid id, OrderPaymentSucceededRequest request, OrderDbContext db, ITenantContext tenantContext, CancellationToken cancellationToken) =>
 {
-    var order = await db.Orders.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var order = await db.Orders.FirstOrDefaultAsync(candidate => candidate.Id == id && candidate.TenantId == tenantId, cancellationToken);
     if (order is null) return HttpResults.NotFound("Order", id);
     order.PaymentId = request.PaymentId;
     order.PaidAmount = request.Amount;
     order.PaidAt = DateTimeOffset.UtcNow;
     await db.SaveChangesAsync(cancellationToken);
-    var items = await db.OrderItems.AsNoTracking().Where(item => item.OrderId == id).ToListAsync(cancellationToken);
+    var items = await db.OrderItems.AsNoTracking().Where(item => item.OrderId == id && item.TenantId == tenantId).ToListAsync(cancellationToken);
     return Results.Ok(ToOrderDto(order, items));
 });
 
-app.MapPost("/api/orders/{id:guid}/coal-change", async (Guid id, CoalChangeRequest request, OrderDbContext db, IDistributedCache cache, CancellationToken cancellationToken) =>
+app.MapPost("/api/orders/{id:guid}/coal-change", async (Guid id, CoalChangeRequest request, OrderDbContext db, ITenantContext tenantContext, IDistributedCache cache, CancellationToken cancellationToken) =>
 {
-    var order = await db.Orders.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var order = await db.Orders.FirstOrDefaultAsync(candidate => candidate.Id == id && candidate.TenantId == tenantId, cancellationToken);
     if (order is null) return HttpResults.NotFound("Order", id);
     if (order.Status is not OrderStatuses.Served and not OrderStatuses.Smoking and not OrderStatuses.CoalChangeRequired) return HttpResults.Conflict("Coal change can be registered only after the order is served.");
-    var change = new CoalChangeEntity { Id = Guid.NewGuid(), OrderId = id, ChangedAt = request.ChangedAt ?? DateTimeOffset.UtcNow };
+    var change = new CoalChangeEntity { Id = Guid.NewGuid(), TenantId = tenantId, OrderId = id, ChangedAt = request.ChangedAt ?? DateTimeOffset.UtcNow };
     db.CoalChanges.Add(change);
     order.Status = OrderStatuses.Smoking;
     await db.SaveChangesAsync(cancellationToken);
-    await SetCoalTimerAsync(cache, id, change.ChangedAt, cancellationToken);
-    var items = await db.OrderItems.AsNoTracking().Where(item => item.OrderId == id).ToListAsync(cancellationToken);
-    if (items.FirstOrDefault() is { } item) await StoreActiveOrderStateAsync(cache, ToOrderDto(order, items), item.HookahId, change.ChangedAt.AddMinutes(20), cancellationToken);
+    await SetCoalTimerAsync(cache, tenantId, id, change.ChangedAt, cancellationToken);
+    var items = await db.OrderItems.AsNoTracking().Where(item => item.OrderId == id && item.TenantId == tenantId).ToListAsync(cancellationToken);
+    if (items.FirstOrDefault() is { } item) await StoreActiveOrderStateAsync(cache, tenantId, ToOrderDto(order, items), item.HookahId, change.ChangedAt.AddMinutes(20), cancellationToken);
     return Results.Created($"/api/orders/{id}/coal-change/{change.Id}", change);
 });
 
-app.MapGet("/api/orders/{id:guid}/coal-timer", async (Guid id, OrderDbContext db, IDistributedCache cache, CancellationToken cancellationToken) =>
+app.MapGet("/api/orders/{id:guid}/coal-timer", async (Guid id, OrderDbContext db, ITenantContext tenantContext, IDistributedCache cache, CancellationToken cancellationToken) =>
 {
-    var order = await db.Orders.AsNoTracking().FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var order = await db.Orders.AsNoTracking().FirstOrDefaultAsync(candidate => candidate.Id == id && candidate.TenantId == tenantId, cancellationToken);
     if (order is null) return HttpResults.NotFound("Order", id);
-    var changes = await db.CoalChanges.AsNoTracking().Where(change => change.OrderId == id).OrderByDescending(change => change.ChangedAt).ToListAsync(cancellationToken);
-    var cached = await cache.GetJsonAsync<CoalTimerState>(CoalTimerKey(id), cancellationToken);
+    var changes = await db.CoalChanges.AsNoTracking().Where(change => change.OrderId == id && change.TenantId == tenantId).OrderByDescending(change => change.ChangedAt).ToListAsync(cancellationToken);
+    var cached = await cache.GetJsonAsync<CoalTimerState>(CoalTimerKey(tenantId, id), cancellationToken);
     if (cached is not null) return Results.Ok(new { order.Id, order.Status, cached.LastChangedAt, cached.NextCoalChangeAt, changes });
     var lastChange = changes.FirstOrDefault();
     var lastChangedAt = lastChange?.ChangedAt ?? order.ServedAt;
     var nextCoalChangeAt = lastChangedAt?.AddMinutes(20);
     if (lastChangedAt is not null && order.Status is OrderStatuses.Served or OrderStatuses.Smoking or OrderStatuses.CoalChangeRequired)
     {
-        await cache.SetJsonAsync(CoalTimerKey(id), new CoalTimerState(id, lastChangedAt.Value, nextCoalChangeAt!.Value), TimeSpan.FromHours(4), cancellationToken);
+        await cache.SetJsonAsync(CoalTimerKey(tenantId, id), new CoalTimerState(id, lastChangedAt.Value, nextCoalChangeAt!.Value), TimeSpan.FromHours(4), cancellationToken);
     }
     return Results.Ok(new { order.Id, order.Status, LastChangedAt = lastChangedAt, NextCoalChangeAt = nextCoalChangeAt, changes });
 });
 
-app.MapDelete("/api/orders/{id:guid}", async (Guid id, CancelOrderRequest request, OrderDbContext db, IEventPublisher events, IHttpClientFactory httpClientFactory, IConfiguration configuration, IDistributedCache cache, CancellationToken cancellationToken) =>
+app.MapDelete("/api/orders/{id:guid}", async (Guid id, CancelOrderRequest request, OrderDbContext db, ITenantContext tenantContext, IEventPublisher events, IHttpClientFactory httpClientFactory, IConfiguration configuration, IDistributedCache cache, CancellationToken cancellationToken) =>
 {
-    var order = await db.Orders.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var order = await db.Orders.FirstOrDefaultAsync(candidate => candidate.Id == id && candidate.TenantId == tenantId, cancellationToken);
     if (order is null) return HttpResults.NotFound("Order", id);
     var reason = request.Reason?.Trim();
     if (string.IsNullOrWhiteSpace(reason)) return HttpResults.Validation("Cancellation reason is required.");
     if (!CanTransition(order.Status, OrderStatuses.Cancelled, allowedOrderTransitions)) return HttpResults.Conflict($"Order status cannot transition from {order.Status} to {OrderStatuses.Cancelled}.");
-    var items = await db.OrderItems.AsNoTracking().Where(item => item.OrderId == id).ToListAsync(cancellationToken);
+    var items = await db.OrderItems.AsNoTracking().Where(item => item.OrderId == id && item.TenantId == tenantId).ToListAsync(cancellationToken);
     order.Status = OrderStatuses.Cancelled;
     var cancelled = new OrderStatusChanged(id, OrderStatuses.Cancelled, DateTimeOffset.UtcNow);
     var outboxMessage = db.AddOutboxMessage(cancelled);
     await db.SaveChangesAsync(cancellationToken);
-    await cache.RemoveAsync(CoalTimerKey(id), cancellationToken);
-    await RemoveActiveOrderStateAsync(cache, order.BranchId, order.Id, cancellationToken);
+    await cache.RemoveAsync(CoalTimerKey(tenantId, id), cancellationToken);
+    await RemoveActiveOrderStateAsync(cache, tenantId, order.BranchId, order.Id, cancellationToken);
     var item = items.First();
     await ReleaseResourcesAsync(order.TableId, item.HookahId, httpClientFactory, configuration, cancellationToken);
     await db.ForwardAndMarkOutboxAsync(events, cancelled, outboxMessage, cancellationToken);
@@ -228,7 +239,11 @@ app.Run();
 static async Task<IReadOnlyCollection<HookahOrder>> ToOrderDtosAsync(IReadOnlyCollection<OrderEntity> orders, OrderDbContext db, CancellationToken cancellationToken)
 {
     var orderIds = orders.Select(order => order.Id).ToArray();
-    var itemGroups = await db.OrderItems.AsNoTracking().Where(item => orderIds.Contains(item.OrderId)).GroupBy(item => item.OrderId).ToDictionaryAsync(group => group.Key, group => group.ToList(), cancellationToken);
+    var tenantIds = orders.Select(order => order.TenantId).Distinct().ToArray();
+    var itemGroups = await db.OrderItems.AsNoTracking()
+        .Where(item => orderIds.Contains(item.OrderId) && tenantIds.Contains(item.TenantId))
+        .GroupBy(item => item.OrderId)
+        .ToDictionaryAsync(group => group.Key, group => group.ToList(), cancellationToken);
     return orders.Select(order => ToOrderDto(order, itemGroups.TryGetValue(order.Id, out var items) ? items : [])).ToArray();
 }
 
@@ -243,31 +258,31 @@ static bool CanTransition(string currentStatus, string nextStatus, IReadOnlyDict
     return allowedOrderTransitions.TryGetValue(currentStatus, out var allowedNextStatuses) && allowedNextStatuses.Contains(nextStatus, StringComparer.OrdinalIgnoreCase);
 }
 
-static string CoalTimerKey(Guid orderId) => $"order:{orderId}:coal-timer";
+static string CoalTimerKey(Guid tenantId, Guid orderId) => $"t:{tenantId}:order:{orderId}:coal-timer";
 
-static Task SetCoalTimerAsync(IDistributedCache cache, Guid orderId, DateTimeOffset lastChangedAt, CancellationToken cancellationToken)
+static Task SetCoalTimerAsync(IDistributedCache cache, Guid tenantId, Guid orderId, DateTimeOffset lastChangedAt, CancellationToken cancellationToken)
 {
-    return cache.SetJsonAsync(CoalTimerKey(orderId), new CoalTimerState(orderId, lastChangedAt, lastChangedAt.AddMinutes(20)), TimeSpan.FromHours(4), cancellationToken);
+    return cache.SetJsonAsync(CoalTimerKey(tenantId, orderId), new CoalTimerState(orderId, lastChangedAt, lastChangedAt.AddMinutes(20)), TimeSpan.FromHours(4), cancellationToken);
 }
 
-static string ActiveOrdersIndexKey(Guid branchId) => $"crm:branch:{branchId}:active-orders";
-static string ActiveOrderKey(Guid orderId) => $"crm:order:{orderId}:state";
+static string ActiveOrdersIndexKey(Guid tenantId, Guid branchId) => $"t:{tenantId}:crm:branch:{branchId}:active-orders";
+static string ActiveOrderKey(Guid tenantId, Guid orderId) => $"t:{tenantId}:crm:order:{orderId}:state";
 
-static async Task StoreActiveOrderStateAsync(IDistributedCache cache, HookahOrder order, Guid hookahId, DateTimeOffset? nextCoalChangeAt, CancellationToken cancellationToken)
+static async Task StoreActiveOrderStateAsync(IDistributedCache cache, Guid tenantId, HookahOrder order, Guid hookahId, DateTimeOffset? nextCoalChangeAt, CancellationToken cancellationToken)
 {
     var state = new ActiveOrderRuntimeState(order.Id, order.BranchId, order.TableId, hookahId, order.ClientId, order.HookahMasterId, order.Status, order.TotalPrice, nextCoalChangeAt, DateTimeOffset.UtcNow);
-    await cache.SetJsonAsync(ActiveOrderKey(order.Id), state, TimeSpan.FromHours(12), cancellationToken);
+    await cache.SetJsonAsync(ActiveOrderKey(tenantId, order.Id), state, TimeSpan.FromHours(12), cancellationToken);
 
-    var ids = await cache.GetJsonAsync<Guid[]>(ActiveOrdersIndexKey(order.BranchId), cancellationToken) ?? [];
+    var ids = await cache.GetJsonAsync<Guid[]>(ActiveOrdersIndexKey(tenantId, order.BranchId), cancellationToken) ?? [];
     var nextIds = ids.Append(order.Id).Distinct().ToArray();
-    await cache.SetJsonAsync(ActiveOrdersIndexKey(order.BranchId), nextIds, TimeSpan.FromHours(12), cancellationToken);
+    await cache.SetJsonAsync(ActiveOrdersIndexKey(tenantId, order.BranchId), nextIds, TimeSpan.FromHours(12), cancellationToken);
 }
 
-static async Task RemoveActiveOrderStateAsync(IDistributedCache cache, Guid branchId, Guid orderId, CancellationToken cancellationToken)
+static async Task RemoveActiveOrderStateAsync(IDistributedCache cache, Guid tenantId, Guid branchId, Guid orderId, CancellationToken cancellationToken)
 {
-    await cache.RemoveAsync(ActiveOrderKey(orderId), cancellationToken);
-    var ids = await cache.GetJsonAsync<Guid[]>(ActiveOrdersIndexKey(branchId), cancellationToken) ?? [];
-    await cache.SetJsonAsync(ActiveOrdersIndexKey(branchId), ids.Where(id => id != orderId).ToArray(), TimeSpan.FromHours(12), cancellationToken);
+    await cache.RemoveAsync(ActiveOrderKey(tenantId, orderId), cancellationToken);
+    var ids = await cache.GetJsonAsync<Guid[]>(ActiveOrdersIndexKey(tenantId, branchId), cancellationToken) ?? [];
+    await cache.SetJsonAsync(ActiveOrdersIndexKey(tenantId, branchId), ids.Where(id => id != orderId).ToArray(), TimeSpan.FromHours(12), cancellationToken);
 }
 
 static async Task MarkResourcesInUseAsync(Guid tableId, Guid hookahId, IHttpClientFactory httpClientFactory, IConfiguration configuration, CancellationToken cancellationToken)

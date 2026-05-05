@@ -16,7 +16,10 @@ public static class EndpointAccessPolicy
         new("PATCH", "/api/staff", [PermissionCodes.StaffManage]),
         new("GET", "/api/roles", [PermissionCodes.StaffManage]),
         new("GET", "/api/permissions", [PermissionCodes.StaffManage]),
+        new("POST", "/api/roles", [PermissionCodes.StaffManage]),
         new("PATCH", "/api/roles", [PermissionCodes.StaffManage]),
+        new("PUT", "/api/roles", [PermissionCodes.StaffManage]),
+        new("DELETE", "/api/roles", [PermissionCodes.StaffManage]),
 
         new("POST", "/api/branches", [PermissionCodes.BranchesManage]),
         new("PATCH", "/api/branches", [PermissionCodes.BranchesManage]),
@@ -145,7 +148,9 @@ public static class EndpointAccessPolicy
             .FirstOrDefault();
 
         if (matched is not null) return matched.RequiredPermissions;
-        if (IsReadMethod(method)) return [];
+
+        // Strict default: any non-public endpoint must be explicitly allowed.
+        // This prevents accidentally exposing new endpoints without updating the matrix.
         return [PermissionCodes.StaffManage];
     }
 

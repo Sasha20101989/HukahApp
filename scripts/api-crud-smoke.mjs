@@ -165,6 +165,32 @@ try {
     return updated;
   });
 
+  await step("roles create/permissions/update/delete + owner guard", async () => {
+    const code = `SMOKE_ROLE_${runId.slice(-8)}`;
+    const role = await api("POST", "/api/roles", { name: `${prefix} Role`, code });
+    assert(role.id, "role id was not returned");
+    cleanup.unshift(async () => {
+      try { await api("DELETE", `/api/roles/${role.id}`); } catch { /* ignore */ }
+    });
+
+    const perms = await api("GET", "/api/permissions");
+    assert(Array.isArray(perms) && perms.length > 0, "permissions must not be empty");
+
+    const requested = ["orders.manage", "bookings.manage"];
+    await api("PUT", `/api/roles/${role.id}/permissions`, { permissions: requested });
+
+    const updated = await api("PATCH", `/api/roles/${role.id}`, { name: `${prefix} Role Updated`, isActive: false });
+    assertEquals(updated.name, `${prefix} Role Updated`, "role name was not updated");
+    assertEquals(Boolean(updated.isActive), false, "role was not deactivated");
+
+    await api("DELETE", `/api/roles/${role.id}`);
+
+    const roles = await api("GET", "/api/roles");
+    const owner = roles.find((r) => String(r.code).toUpperCase() === "OWNER" && Boolean(r.isSystem));
+    assert(owner && owner.id, "system owner role was not found");
+    await expectHttpError(() => api("DELETE", `/api/roles/${owner.id}`), 409, "expected OWNER delete to fail with 409");
+  });
+
   await step("staff shift create/start/finish/cancel", async () => {
     const start = new Date(Date.now() + 24 * 60 * 60 * 1000);
     start.setUTCHours(9, 0, 0, 0);
@@ -301,6 +327,19 @@ function printReport(items) {
       console.error(`fail ${item.name} ${item.durationMs}ms: ${item.error}`);
     }
   }
+}
+
+async function expectHttpError(fn, expectedStatus, message) {
+  try {
+    await fn();
+  } catch (error) {
+    const text = error instanceof Error ? error.message : String(error);
+    if (!text.includes(`HTTP ${expectedStatus}`)) {
+      throw new Error(`${message}: expected HTTP ${expectedStatus}, got ${text}`);
+    }
+    return;
+  }
+  throw new Error(`${message}: expected error HTTP ${expectedStatus}, but request succeeded`);
 }
 
 function trimTrailingSlash(value) {

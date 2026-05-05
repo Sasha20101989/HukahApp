@@ -34,6 +34,7 @@ services:
       dockerfile: frontend/Dockerfile
       args:
         APP_PATH: frontend/crm-app
+        APP_NAME: "@hookah/crm-app"
     environment:
       NEXT_PUBLIC_API_BASE_URL: http://localhost:8080
     ports:
@@ -47,6 +48,7 @@ services:
       dockerfile: frontend/Dockerfile
       args:
         APP_PATH: frontend/client-app
+        APP_NAME: "@hookah/client-app"
     environment:
       NEXT_PUBLIC_API_BASE_URL: http://localhost:8080
     ports:

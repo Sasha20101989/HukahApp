@@ -9,6 +9,7 @@ BUILD=1
 PULL=0
 RESET=0
 FOLLOW_LOGS=0
+NO_CACHE=0
 WAIT_TIMEOUT_SECONDS="${WAIT_TIMEOUT_SECONDS:-180}"
 
 usage() {
@@ -21,6 +22,7 @@ CRM app, client app and Nginx.
 
 Options:
   --no-build       Start existing images without rebuilding.
+  --no-cache       Rebuild images without using the Docker build cache (slower but avoids stale layers).
   --pull           Pull base images before build/start.
   --reset          Stop the stack and remove Compose volumes before starting.
   --logs           Follow logs after the stack becomes ready.
@@ -36,6 +38,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-build)
       BUILD=0
+      shift
+      ;;
+    --no-cache)
+      NO_CACHE=1
       shift
       ;;
     --pull)
@@ -148,7 +154,14 @@ if (( PULL == 1 )); then
 fi
 
 UP_ARGS=(up -d --remove-orphans)
-if (( BUILD == 1 )); then
+if (( BUILD == 1 )) && (( NO_CACHE == 1 )); then
+  echo "Building images without cache..."
+  BUILD_ARGS=(build --no-cache)
+  if (( PULL == 1 )); then
+    BUILD_ARGS+=(--pull)
+  fi
+  compose "${BUILD_ARGS[@]}"
+elif (( BUILD == 1 )); then
   UP_ARGS+=(--build)
 fi
 
