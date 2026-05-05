@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BarChart3, Bell, CalendarClock, ClipboardList, Flame, Gauge, LayoutDashboard, LockKeyhole, LogOut, MessageSquare, PackageSearch, Plus, Search, ShieldCheck, Tags, TimerReset, UsersRound } from "lucide-react";
+import { BarChart3, Bell, Building2, CalendarClock, ClipboardList, Flame, Gauge, LayoutDashboard, LockKeyhole, LogOut, MessageSquare, PackageSearch, Plus, Search, ShieldCheck, Tags, TimerReset, UsersRound } from "lucide-react";
 import type { DragEvent, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { configureApiAuth, deleteJson, getJson, hasPermission, loginStaff, logoutAuth, patchJson, postJson, putJson, shortId, timeLabel, type Booking, type Bowl, type Branch, type BranchWorkingHours, type DashboardMetrics, type FloorPlan, type Hookah, type InventoryItem, type InventoryMovement, type Mix, type NotificationItem, type NotificationPreference, type NotificationTemplate, type Payment, type Promocode, type Review, type RoleCode, type RuntimeOrder, type StaffPerformanceMetric, type StaffShift, type Table, type TableLoadMetric, type Tobacco, type TobaccoUsageMetric, type TopMixMetric, type UserProfile } from "../lib/api";
@@ -127,7 +127,7 @@ export default function CrmDashboard() {
       <aside className="sidebar">
         <div className="brand"><span className="brand-mark"><Flame size={20} /></span><span>Hookah CRM</span></div>
         <div className="role-card"><span><ShieldCheck size={15} /> Сессия</span><strong>{session.profile?.name}</strong><small>{role}</small><button className="ghost" onClick={handleLogout}><LogOut size={15} />Выйти</button></div>
-        <nav className="nav" aria-label="CRM sections">{allowedSections.map((item) => <button className={section === item.id ? "active" : ""} onClick={() => setSection(item.id)} key={item.id}>{item.icon}{item.label}</button>)}</nav>
+        <nav className="nav" aria-label="CRM sections">{allowedSections.map((item) => <button className={section === item.id ? "active" : ""} onClick={() => setSection(item.id)} key={item.id}>{item.icon}{item.label}</button>)}{hasPermission(role, "tenants.manage") && <a className="admin-link" href="/admin/tenants"><Building2 size={18} />Тенанты</a>}</nav>
       </aside>
 
       <section className="main">

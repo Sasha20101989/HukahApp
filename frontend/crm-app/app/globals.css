@@ -26,7 +26,8 @@ button { border: 0; cursor: pointer; }
 .role-card span { display: flex; gap: 6px; align-items: center; font-size: 13px; color: var(--muted); }
 .role-card select, .search input { border: 0; outline: 0; background: transparent; color: var(--ink); }
 .nav { display: grid; gap: 8px; }
-.nav button { min-height: 44px; display: flex; align-items: center; gap: 10px; border-radius: 12px; padding: 0 12px; color: var(--muted); background: transparent; text-align: left; }
+.nav button, .admin-link { min-height: 44px; display: flex; align-items: center; gap: 10px; border-radius: 12px; padding: 0 12px; color: var(--muted); background: transparent; text-align: left; }
+.admin-link { text-decoration: none; border: 1px solid var(--line); background: white; font-weight: 780; color: var(--brand-dark); }
 .nav button.active { color: var(--brand-dark); background: #dff0e8; font-weight: 780; }
 .main { min-width: 0; padding: 22px; }
 .topbar { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; margin-bottom: 18px; }

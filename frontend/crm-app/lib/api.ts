@@ -2,8 +2,10 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8
 
 export type AuthResponse = { userId: string; accessToken: string; refreshToken: string };
 export type RoleCode = "OWNER" | "MANAGER" | "HOOKAH_MASTER" | "WAITER" | "CLIENT";
-export type PermissionCode = "branches.manage" | "staff.manage" | "mixes.manage" | "inventory.manage" | "orders.manage" | "bookings.manage" | "analytics.read" | "bookings.create" | "*";
+export type PermissionCode = "tenants.manage" | "branches.manage" | "staff.manage" | "mixes.manage" | "inventory.manage" | "orders.manage" | "bookings.manage" | "analytics.read" | "bookings.create" | "*";
 export type UserProfile = { id: string; name: string; phone: string; email?: string | null; role: RoleCode; branchId?: string | null; status: string };
+export type Tenant = { id: string; slug: string; name: string; isActive: boolean; createdAt: string };
+export type TenantSettings = { tenantId: string; defaultTimezone: string; defaultCurrency: string; requireDeposit: boolean };
 export type Branch = { id: string; name: string; address: string; phone: string; timezone: string; isActive: boolean };
 export type BranchWorkingHours = { branchId: string; dayOfWeek: number; opensAt: string; closesAt: string; isClosed: boolean };
 export type FloorPlan = { branchId: string; halls: Hall[]; zones: Zone[]; tables: Table[] };
@@ -46,6 +48,26 @@ export function hasPermission(role: RoleCode | undefined, permission: Permission
   if (!role) return false;
   const permissions = rolePermissions[role] ?? [];
   return permissions.includes("*") || permissions.includes(permission);
+}
+
+export function getTenants(accessToken?: string) {
+  return getJson<Tenant[]>("/api/tenants", accessToken);
+}
+
+export function createTenant(payload: { name: string; slug: string }, accessToken?: string) {
+  return postJson<Tenant>("/api/tenants", payload, accessToken);
+}
+
+export function updateTenant(id: string, payload: { name?: string; slug?: string; isActive?: boolean }, accessToken?: string) {
+  return patchJson<Tenant>(`/api/tenants/${id}`, payload, accessToken);
+}
+
+export function getTenantSettings(id: string, accessToken?: string) {
+  return getJson<TenantSettings>(`/api/tenants/${id}/settings`, accessToken);
+}
+
+export function updateTenantSettings(id: string, payload: TenantSettings, accessToken?: string) {
+  return putJson<TenantSettings>(`/api/tenants/${id}/settings`, payload, accessToken);
 }
 
 export function loginStaff(phone: string, password: string) {

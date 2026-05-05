@@ -10,6 +10,7 @@ The frontend is a pnpm workspace with two Next.js PWA apps:
 Implemented staff workflows:
 
 - tablet-first operational dashboard;
+- owner-only tenant admin console at `/admin/tenants`;
 - role switching for `OWNER`, `MANAGER`, `HOOKAH_MASTER`, `WAITER`;
 - React Query polling for branch runtime data;
 - Zustand state for selected role, section, branch and search;
@@ -21,6 +22,20 @@ Implemented staff workflows:
 - inventory low-stock board;
 - mixology board with internal cost/margin visible only in CRM;
 - staff shift/performance board placeholder ready for richer data.
+
+### Tenant admin console
+
+`/admin/tenants` is protected by the CRM route middleware and by UI permission checks. It requires `tenants.manage` and is intended for platform OWNER users.
+
+Implemented workflows:
+
+- list tenants from `GET /api/tenants`;
+- create tenant through `POST /api/tenants`;
+- save tenant settings through `PUT /api/tenants/{id}/settings`;
+- edit tenant name, slug and active status;
+- edit default timezone, currency and deposit requirement.
+
+The page uses the same JWT refresh flow as the CRM dashboard. It does not use demo fallback data: if backend authorization, tenant endpoints or settings endpoints fail, the page renders the backend error state.
 
 ## Client app
 
