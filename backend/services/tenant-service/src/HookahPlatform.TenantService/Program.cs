@@ -99,6 +99,49 @@ app.MapPatch("/api/tenants/{id:guid}", async (Guid id, UpdateTenantRequest reque
     return Results.Ok(new TenantDto(tenant.Id, tenant.Slug, tenant.Name, tenant.IsActive, tenant.CreatedAt));
 });
 
+app.MapPatch("/api/tenants/{id:guid}/suspend", async (Guid id, TenantDbContext db, CancellationToken cancellationToken) =>
+{
+    var tenant = await db.Tenants.FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
+    if (tenant is null) return HttpResults.NotFound("Tenant", id);
+
+    tenant.IsActive = false;
+    await db.SaveChangesAsync(cancellationToken);
+    return Results.Ok(new TenantDto(tenant.Id, tenant.Slug, tenant.Name, tenant.IsActive, tenant.CreatedAt));
+});
+
+app.MapPatch("/api/tenants/{id:guid}/reactivate", async (Guid id, TenantDbContext db, CancellationToken cancellationToken) =>
+{
+    var tenant = await db.Tenants.FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
+    if (tenant is null) return HttpResults.NotFound("Tenant", id);
+
+    tenant.IsActive = true;
+    await db.SaveChangesAsync(cancellationToken);
+    return Results.Ok(new TenantDto(tenant.Id, tenant.Slug, tenant.Name, tenant.IsActive, tenant.CreatedAt));
+});
+
+app.MapPost("/api/tenants/{id:guid}/export", async (Guid id, TenantDbContext db, CancellationToken cancellationToken) =>
+{
+    var tenant = await db.Tenants.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
+    if (tenant is null) return HttpResults.NotFound("Tenant", id);
+
+    var settings = await db.TenantSettings.AsNoTracking().FirstOrDefaultAsync(x => x.TenantId == id, cancellationToken);
+    return Results.Ok(new TenantExportDto(
+        new TenantDto(tenant.Id, tenant.Slug, tenant.Name, tenant.IsActive, tenant.CreatedAt),
+        settings is null ? null : new TenantSettingsDto(settings.TenantId, settings.DefaultTimezone, settings.DefaultCurrency, settings.RequireDeposit),
+        DateTimeOffset.UtcNow));
+});
+
+app.MapDelete("/api/tenants/{id:guid}", async (Guid id, TenantDbContext db, CancellationToken cancellationToken) =>
+{
+    var tenant = await db.Tenants.FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
+    if (tenant is null) return HttpResults.NotFound("Tenant", id);
+
+    // Current schema has is_active only; hard deletion is intentionally avoided until retention/export is finalized.
+    tenant.IsActive = false;
+    await db.SaveChangesAsync(cancellationToken);
+    return Results.NoContent();
+});
+
 app.MapGet("/api/tenants/{id:guid}/settings", async (Guid id, TenantDbContext db, CancellationToken cancellationToken) =>
 {
     var settings = await db.TenantSettings.AsNoTracking().FirstOrDefaultAsync(x => x.TenantId == id, cancellationToken);

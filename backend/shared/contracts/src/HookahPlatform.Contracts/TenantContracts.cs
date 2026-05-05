@@ -26,6 +26,11 @@ public sealed record TenantBrandingDto(
     string PrimaryColor,
     string AccentColor);
 
+public sealed record TenantExportDto(
+    TenantDto Tenant,
+    TenantSettingsDto? Settings,
+    DateTimeOffset ExportedAt);
+
 public sealed record CreateTenantRequest(
     string Slug,
     string Name);
