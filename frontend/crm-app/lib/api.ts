@@ -3,6 +3,8 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8
 export type AuthResponse = { userId: string; accessToken: string; refreshToken: string };
 export type RoleCode = "OWNER" | "MANAGER" | "HOOKAH_MASTER" | "WAITER" | "CLIENT";
 export type PermissionCode = "tenants.manage" | "branches.manage" | "staff.manage" | "mixes.manage" | "inventory.manage" | "orders.manage" | "bookings.manage" | "analytics.read" | "bookings.create" | "*";
+export type PermissionDefinition = { code: string; description: string };
+export type TenantRole = { id: string; name: string; code: string; isSystem: boolean; isActive: boolean; permissions: string[] };
 export type UserProfile = { id: string; name: string; phone: string; email?: string | null; role: RoleCode; branchId?: string | null; status: string };
 export type Tenant = { id: string; slug: string; name: string; isActive: boolean; createdAt: string };
 export type TenantSettings = { tenantId: string; defaultTimezone: string; defaultCurrency: string; requireDeposit: boolean };
@@ -68,6 +70,30 @@ export function getTenantSettings(id: string, accessToken?: string) {
 
 export function updateTenantSettings(id: string, payload: TenantSettings, accessToken?: string) {
   return putJson<TenantSettings>(`/api/tenants/${id}/settings`, payload, accessToken);
+}
+
+export function getRoles(accessToken?: string) {
+  return getJson<TenantRole[]>("/api/roles", accessToken);
+}
+
+export function getPermissions(accessToken?: string) {
+  return getJson<PermissionDefinition[]>("/api/permissions", accessToken);
+}
+
+export function createRole(payload: { name: string; code: string }, accessToken?: string) {
+  return postJson<TenantRole>("/api/roles", payload, accessToken);
+}
+
+export function updateRole(id: string, payload: { name?: string; isActive?: boolean }, accessToken?: string) {
+  return patchJson<TenantRole>(`/api/roles/${id}`, payload, accessToken);
+}
+
+export function updateRolePermissions(id: string, permissions: string[], accessToken?: string) {
+  return putJson<TenantRole>(`/api/roles/${id}/permissions`, { permissions }, accessToken);
+}
+
+export function deleteRole(id: string, accessToken?: string) {
+  return deleteJson<void>(`/api/roles/${id}`, undefined, accessToken);
 }
 
 export function loginStaff(phone: string, password: string) {
