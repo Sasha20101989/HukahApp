@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Building2, Flame, LogOut, ShieldCheck } from "lucide-react";
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { configureApiAuth, createTenant, getJson, getTenantSettings, getTenants, hasPermission, logoutAuth, updateTenant, updateTenantSettings, type Tenant, type TenantSettings, type UserProfile } from "../../../lib/api";
+import { configureApiAuth, createTenant, deleteTenant, exportTenant, getJson, getTenantSettings, getTenants, hasPermission, logoutAuth, reactivateTenant, suspendTenant, updateTenant, updateTenantSettings, type Tenant, type TenantSettings, type UserProfile } from "../../../lib/api";
 import { hydrateCrmSession, useCrmStore } from "../../../lib/store";
 import { ActionButton, CrudRowActions, CrudToolbar, EmptyState, FieldError, FormError, FormField, LoadingState, MutationToast } from "../../../lib/ui";
 
@@ -129,6 +129,7 @@ function TenantRow({ tenant, token, onChanged }: { tenant: Tenant; token: string
   const [name, setName] = useState(tenant.name);
   const [slug, setSlug] = useState(tenant.slug);
   const [isActive, setIsActive] = useState(tenant.isActive);
+  const [exportPreview, setExportPreview] = useState("");
   const settings = useQuery({ queryKey: ["tenant-settings", tenant.id], queryFn: () => getTenantSettings(tenant.id, token) });
   const initialSettings = useMemo(() => settings.data ?? { tenantId: tenant.id, defaultTimezone, defaultCurrency, requireDeposit: true }, [settings.data, tenant.id]);
   const [settingsDraft, setSettingsDraft] = useState<TenantSettings>(initialSettings);
@@ -157,6 +158,13 @@ function TenantRow({ tenant, token, onChanged }: { tenant: Tenant; token: string
     },
     onSuccess: onChanged
   });
+  const suspend = useMutation({ mutationFn: () => suspendTenant(tenant.id, token), onSuccess: onChanged });
+  const reactivate = useMutation({ mutationFn: () => reactivateTenant(tenant.id, token), onSuccess: onChanged });
+  const remove = useMutation({ mutationFn: () => deleteTenant(tenant.id, token), onSuccess: onChanged });
+  const exportMutation = useMutation({
+    mutationFn: () => exportTenant(tenant.id, token),
+    onSuccess: (payload) => setExportPreview(JSON.stringify(payload, null, 2))
+  });
 
   return (
     <article className="booking-row booking-row-rich">
@@ -172,12 +180,17 @@ function TenantRow({ tenant, token, onChanged }: { tenant: Tenant; token: string
         <FormField label="Timezone"><input value={settingsDraft.defaultTimezone} onChange={(event) => setSettingsDraft((draft) => ({ ...draft, defaultTimezone: event.target.value }))} /></FormField>
         <FormField label="Currency"><input value={settingsDraft.defaultCurrency} onChange={(event) => setSettingsDraft((draft) => ({ ...draft, defaultCurrency: event.target.value.toUpperCase() }))} /></FormField>
         <label className="check"><input type="checkbox" checked={settingsDraft.requireDeposit} onChange={(event) => setSettingsDraft((draft) => ({ ...draft, requireDeposit: event.target.checked }))} />Депозит</label>
-        <CrudRowActions><ActionButton disabled={Boolean(validation) || settings.isLoading} pending={save.isPending} pendingLabel="Сохраняем..." onClick={() => save.mutate()}>save</ActionButton></CrudRowActions>
+        <CrudRowActions><ActionButton disabled={Boolean(validation) || settings.isLoading} pending={save.isPending} pendingLabel="Сохраняем..." onClick={() => save.mutate()}>save</ActionButton><ActionButton pending={exportMutation.isPending} pendingLabel="Экспорт..." onClick={() => exportMutation.mutate()}>export</ActionButton>{tenant.isActive ? <ActionButton danger pending={suspend.isPending} pendingLabel="Suspend..." confirm="Приостановить tenant?" onClick={() => suspend.mutate()}>suspend</ActionButton> : <ActionButton pending={reactivate.isPending} pendingLabel="Reactivate..." onClick={() => reactivate.mutate()}>reactivate</ActionButton>}<ActionButton danger pending={remove.isPending} pendingLabel="Delete..." confirm="Soft-delete tenant? Он станет inactive." onClick={() => remove.mutate()}>delete</ActionButton></CrudRowActions>
       </div>
       {settings.isLoading && <LoadingState label="Загружаем settings..." />}
       {settings.isError && <FormError error={settings.error} />}
       <FieldError message={validation} />
       <MutationToast mutation={save} successMessage="Tenant обновлен" />
+      <MutationToast mutation={suspend} successMessage="Tenant suspended" />
+      <MutationToast mutation={reactivate} successMessage="Tenant reactivated" />
+      <MutationToast mutation={remove} successMessage="Tenant soft-deleted" />
+      <MutationToast mutation={exportMutation} successMessage="Export snapshot ready" />
+      {exportPreview && <pre className="audit-metadata">{exportPreview}</pre>}
     </article>
   );
 }

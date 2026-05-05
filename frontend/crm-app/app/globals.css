@@ -146,7 +146,7 @@ button { border: 0; cursor: pointer; }
 .preference-card label { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-weight: 760; }
 .permission-picker { grid-column: 1 / -1; display: flex; gap: 8px; flex-wrap: wrap; padding: 8px; border: 1px dashed var(--line); border-radius: 12px; background: white; }
 .audit-metadata { min-width: min(520px, 100%); display: grid; gap: 6px; }
-.audit-metadata pre { max-width: 100%; overflow: auto; margin: 0; border: 1px solid var(--line); border-radius: 12px; background: var(--field); padding: 10px; color: var(--brand-dark); font-size: 12px; }
+.audit-metadata, .audit-metadata pre { max-width: 100%; overflow: auto; margin: 0; border: 1px solid var(--line); border-radius: 12px; background: var(--field); padding: 10px; color: var(--brand-dark); font-size: 12px; }
 .floor .empty-state { position: absolute; inset: 18px; display: grid; place-items: center; }
 .crud-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; margin-bottom: 14px; }
 .crud-card { border: 1px solid var(--line); border-radius: 14px; background: rgba(244,248,245,.72); padding: 12px; margin-bottom: 12px; }

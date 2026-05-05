@@ -36,6 +36,7 @@ Implemented workflows:
 - save tenant settings through `PUT /api/tenants/{id}/settings`;
 - edit tenant name, slug and active status;
 - edit default timezone, currency and deposit requirement.
+- run lifecycle actions: suspend, reactivate, export snapshot and soft-delete.
 
 The page uses the same JWT refresh flow as the CRM dashboard. It does not use demo fallback data: if backend authorization, tenant endpoints or settings endpoints fail, the page renders the backend error state.
 

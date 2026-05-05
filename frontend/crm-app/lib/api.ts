@@ -65,6 +65,22 @@ export function updateTenant(id: string, payload: { name?: string; slug?: string
   return patchJson<Tenant>(`/api/tenants/${id}`, payload, accessToken);
 }
 
+export function suspendTenant(id: string, accessToken?: string) {
+  return patchJson<Tenant>(`/api/tenants/${id}/suspend`, {}, accessToken);
+}
+
+export function reactivateTenant(id: string, accessToken?: string) {
+  return patchJson<Tenant>(`/api/tenants/${id}/reactivate`, {}, accessToken);
+}
+
+export function exportTenant(id: string, accessToken?: string) {
+  return postJson<{ tenant: Tenant; settings?: TenantSettings | null; exportedAt: string }>(`/api/tenants/${id}/export`, {}, accessToken);
+}
+
+export function deleteTenant(id: string, accessToken?: string) {
+  return deleteJson<void>(`/api/tenants/${id}`, undefined, accessToken);
+}
+
 export function getTenantSettings(id: string, accessToken?: string) {
   return getJson<TenantSettings>(`/api/tenants/${id}/settings`, accessToken);
 }
