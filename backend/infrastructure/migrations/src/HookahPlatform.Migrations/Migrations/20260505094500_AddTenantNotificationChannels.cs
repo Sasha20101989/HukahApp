@@ -1,10 +1,13 @@
-﻿using Microsoft.EntityFrameworkCore.Migrations;
+﻿using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
 namespace HookahPlatform.Migrations.Migrations
 {
     /// <inheritdoc />
+    [DbContext(typeof(HookahPlatformMigrationDbContext))]
+    [Migration("20260505094500_AddTenantNotificationChannels")]
     public partial class AddTenantNotificationChannels : Migration
     {
         /// <inheritdoc />

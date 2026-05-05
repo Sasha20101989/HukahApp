@@ -12,8 +12,8 @@ const chrome = findChrome();
 const scenarios = [
   { name: "crm login renders", url: `${crmUrl}/login`, markers: ["Hookah CRM", "Вход персонала", "Телефон", "Пароль"] },
   { name: "crm middleware redirects to login", url: crmUrl, markers: ["Hookah CRM", "Вход персонала"] },
-  { name: "client booking renders", url: clientUrl, markers: ["Hookah Place", "PWA BOOKING", "Итог брони"] },
-  { name: "client account guard redirects home", url: `${clientUrl}/account`, markers: ["Hookah Place", "PWA BOOKING"] },
+  { name: "client booking renders", url: clientUrl, markers: ["Demo Tenant", "PWA BOOKING", "Итог брони"] },
+  { name: "client account guard redirects home", url: `${clientUrl}/account`, markers: ["Demo Tenant", "PWA BOOKING"] },
   { name: "payment return success renders", url: `${clientUrl}/payment/return?status=success&paymentId=smoke`, markers: ["Статус оплаты", "SUCCESS"] },
   { name: "payment return failed renders", url: `${clientUrl}/payment/return?status=failed&paymentId=smoke`, markers: ["Статус оплаты", "FAILED"] },
   { name: "payment return processing renders", url: `${clientUrl}/payment/return?status=processing&paymentId=smoke&bookingId=booking-smoke`, markers: ["Статус оплаты", "PROCESSING", "booking-smoke"] },

@@ -36,6 +36,9 @@ USAGE
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --)
+      shift
+      ;;
     --no-build)
       BUILD=0
       shift

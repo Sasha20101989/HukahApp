@@ -79,8 +79,9 @@ app.Map("/{**path}", async (
         }
     }
 
+    var requiredPermissions = EndpointAccessPolicy.GetRequiredPermissions(method, requestPath);
     IReadOnlyCollection<string>? resolvedPermissions = null;
-    if (principal is not null)
+    if (principal is not null && requiredPermissions is not null)
     {
         var userServiceBaseUrl = builder.Configuration["Services:user-service:BaseUrl"] ?? "http://user-service:8080";
         var internalServiceSecret = builder.Configuration["Security:InternalServiceSecret"];
@@ -106,7 +107,6 @@ app.Map("/{**path}", async (
         }
     }
 
-    var requiredPermissions = EndpointAccessPolicy.GetRequiredPermissions(method, requestPath);
     if (requiredPermissions is not null)
     {
         if (principal is null)

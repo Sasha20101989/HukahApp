@@ -26,6 +26,8 @@ public static class ServiceCatalog
         new("/api/audit-logs", "tenant-service"),
         new("/api/public/tenant", "tenant-service"),
         new("/api/auth", "auth-service"),
+        new("/api/permissions", "user-service"),
+        new("/api/roles", "user-service"),
         new("/api/users", "user-service"),
         new("/api/staff", "user-service"),
         new("/api/branches", "branch-service"),

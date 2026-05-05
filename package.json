@@ -8,6 +8,7 @@
   ],
   "scripts": {
     "local:up": "bash scripts/local-up.sh",
+    "local:up:nobuild": "bash scripts/local-up.sh --no-build",
     "local:up:nocache": "bash scripts/local-up.sh --no-cache",
     "local:up:logs": "bash scripts/local-up.sh --logs",
     "local:reset": "bash scripts/local-up.sh --reset",

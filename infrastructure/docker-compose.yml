@@ -70,6 +70,7 @@ services:
       Jwt__Audience: hookah-platform-clients
       Jwt__Secret: change-this-secret-before-production-change-this-secret
       Security__GatewaySecret: local-gateway-secret-change-me
+      Security__InternalServiceSecret: local-service-secret-change-me
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       OTEL_EXPORTER_OTLP_PROTOCOL: grpc
     depends_on:
