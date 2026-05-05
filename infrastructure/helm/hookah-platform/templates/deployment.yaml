@@ -20,7 +20,7 @@ spec:
     spec:
       containers:
         - name: {{ $name }}
-          image: "{{ $.Values.imageRegistry }}/{{ $service.image }}:{{ $.Chart.AppVersion }}"
+          image: "{{ $.Values.imageRegistry }}/{{ $service.image }}:{{ default $.Chart.AppVersion $.Values.imageTag }}"
           imagePullPolicy: {{ $.Values.imagePullPolicy }}
           {{- if $service.command }}
           command: ["dotnet"]

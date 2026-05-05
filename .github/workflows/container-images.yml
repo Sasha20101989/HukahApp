@@ -1,0 +1,103 @@
+name: container-images
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: api-gateway
+            dockerfile: backend/Dockerfile
+            build_args: |
+              PROJECT_PATH=services/api-gateway/src/HookahPlatform.ApiGateway/HookahPlatform.ApiGateway.csproj
+          - image: auth-service
+            dockerfile: backend/Dockerfile
+            build_args: |
+              PROJECT_PATH=services/auth-service/src/HookahPlatform.AuthService/HookahPlatform.AuthService.csproj
+          - image: user-service
+            dockerfile: backend/Dockerfile
+            build_args: |
+              PROJECT_PATH=services/user-service/src/HookahPlatform.UserService/HookahPlatform.UserService.csproj
+          - image: tenant-service
+            dockerfile: backend/Dockerfile
+            build_args: |
+              PROJECT_PATH=services/tenant-service/src/HookahPlatform.TenantService/HookahPlatform.TenantService.csproj
+          - image: branch-service
+            dockerfile: backend/Dockerfile
+            build_args: |
+              PROJECT_PATH=services/branch-service/src/HookahPlatform.BranchService/HookahPlatform.BranchService.csproj
+          - image: mixology-service
+            dockerfile: backend/Dockerfile
+            build_args: |
+              PROJECT_PATH=services/mixology-service/src/HookahPlatform.MixologyService/HookahPlatform.MixologyService.csproj
+          - image: inventory-service
+            dockerfile: backend/Dockerfile
+            build_args: |
+              PROJECT_PATH=services/inventory-service/src/HookahPlatform.InventoryService/HookahPlatform.InventoryService.csproj
+          - image: order-service
+            dockerfile: backend/Dockerfile
+            build_args: |
+              PROJECT_PATH=services/order-service/src/HookahPlatform.OrderService/HookahPlatform.OrderService.csproj
+          - image: booking-service
+            dockerfile: backend/Dockerfile
+            build_args: |
+              PROJECT_PATH=services/booking-service/src/HookahPlatform.BookingService/HookahPlatform.BookingService.csproj
+          - image: payment-service
+            dockerfile: backend/Dockerfile
+            build_args: |
+              PROJECT_PATH=services/payment-service/src/HookahPlatform.PaymentService/HookahPlatform.PaymentService.csproj
+          - image: notification-service
+            dockerfile: backend/Dockerfile
+            build_args: |
+              PROJECT_PATH=services/notification-service/src/HookahPlatform.NotificationService/HookahPlatform.NotificationService.csproj
+          - image: analytics-service
+            dockerfile: backend/Dockerfile
+            build_args: |
+              PROJECT_PATH=services/analytics-service/src/HookahPlatform.AnalyticsService/HookahPlatform.AnalyticsService.csproj
+          - image: review-service
+            dockerfile: backend/Dockerfile
+            build_args: |
+              PROJECT_PATH=services/review-service/src/HookahPlatform.ReviewService/HookahPlatform.ReviewService.csproj
+          - image: promo-service
+            dockerfile: backend/Dockerfile
+            build_args: |
+              PROJECT_PATH=services/promo-service/src/HookahPlatform.PromoService/HookahPlatform.PromoService.csproj
+          - image: migrations
+            dockerfile: backend/Dockerfile
+            build_args: |
+              PROJECT_PATH=infrastructure/migrations/src/HookahPlatform.Migrations/HookahPlatform.Migrations.csproj
+          - image: crm-app
+            dockerfile: frontend/Dockerfile
+            build_args: |
+              APP_PATH=frontend/crm-app
+              APP_NAME=@hookah/crm-app
+          - image: client-app
+            dockerfile: frontend/Dockerfile
+            build_args: |
+              APP_PATH=frontend/client-app
+              APP_NAME=@hookah/client-app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          build-args: ${{ matrix.build_args }}
+          tags: |
+            ghcr.io/${{ github.repository }}/${{ matrix.image }}:${{ github.sha }}
+            ghcr.io/${{ github.repository }}/${{ matrix.image }}:latest

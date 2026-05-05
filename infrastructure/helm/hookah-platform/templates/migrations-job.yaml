@@ -8,7 +8,7 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: migrations
-          image: "{{ .Values.imageRegistry }}/{{ .Values.dbMigrator.image }}:{{ .Chart.AppVersion }}"
+          image: "{{ .Values.imageRegistry }}/{{ .Values.dbMigrator.image }}:{{ default .Chart.AppVersion .Values.imageTag }}"
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           command: ["dotnet"]
           args: [{{ .Values.dbMigrator.command | quote }}]

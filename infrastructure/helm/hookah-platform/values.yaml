@@ -1,4 +1,5 @@
 imageRegistry: ghcr.io/hookah-platform/hookah-platform
+imageTag: ""
 imagePullPolicy: IfNotPresent
 
 commonEnv:

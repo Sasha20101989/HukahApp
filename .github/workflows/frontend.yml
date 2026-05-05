@@ -21,7 +21,16 @@ jobs:
         run: corepack enable
 
       - name: Install
-        run: pnpm install --frozen-lockfile=false
+        run: corepack pnpm install --frozen-lockfile
 
       - name: Build frontend
-        run: pnpm frontend:build
+        run: corepack pnpm frontend:build
+
+      - name: Start frontend apps
+        run: |
+          corepack pnpm --dir frontend/crm-app start > /tmp/hookah-crm.log 2>&1 &
+          corepack pnpm --dir frontend/client-app start > /tmp/hookah-client.log 2>&1 &
+          sleep 10
+
+      - name: Frontend smoke
+        run: corepack pnpm frontend:smoke

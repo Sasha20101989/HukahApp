@@ -18,7 +18,10 @@ jobs:
           dotnet-version: 8.0.x
 
       - name: Restore
-        run: dotnet restore backend/HookahPlatform.sln --ignore-failed-sources
+        run: dotnet restore backend/HookahPlatform.sln
 
       - name: Build
-        run: dotnet build backend/HookahPlatform.sln --no-restore --configuration Release
+        run: dotnet build backend/HookahPlatform.sln --no-restore -m:1 /nr:false
+
+      - name: Test
+        run: dotnet test backend/HookahPlatform.sln --no-build

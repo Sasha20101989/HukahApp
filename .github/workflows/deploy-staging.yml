@@ -1,0 +1,30 @@
+name: deploy-staging
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: Lint chart
+        run: helm lint infrastructure/helm/hookah-platform
+      - name: Configure kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.STAGING_KUBECONFIG }}" > ~/.kube/config
+          chmod 600 ~/.kube/config
+      - name: Deploy
+        run: |
+          helm upgrade --install hookah-platform infrastructure/helm/hookah-platform \
+            --namespace hookah-staging \
+            --create-namespace \
+            --set imageRegistry=ghcr.io/${{ github.repository }} \
+            --set-string imageTag=${{ github.sha }}
+      - name: Run tenant isolation smoke
+        env:
+          GATEWAY_URL: ${{ secrets.STAGING_GATEWAY_URL }}
+        run: node scripts/tenant-isolation-smoke.mjs
