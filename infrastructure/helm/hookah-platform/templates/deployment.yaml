@@ -1,0 +1,54 @@
+{{- range $name, $service := .Values.services }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "hookah-platform.fullname" $ }}-{{ $name }}
+  labels:
+    app.kubernetes.io/name: {{ include "hookah-platform.name" $ }}
+    app.kubernetes.io/component: {{ $name }}
+spec:
+  replicas: {{ $service.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "hookah-platform.name" $ }}
+      app.kubernetes.io/component: {{ $name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "hookah-platform.name" $ }}
+        app.kubernetes.io/component: {{ $name }}
+    spec:
+      containers:
+        - name: {{ $name }}
+          image: "{{ $.Values.imageRegistry }}/{{ $service.image }}:{{ $.Chart.AppVersion }}"
+          imagePullPolicy: {{ $.Values.imagePullPolicy }}
+          {{- if $service.command }}
+          command: ["dotnet"]
+          args: [{{ $service.command | quote }}]
+          {{- end }}
+          ports:
+            - containerPort: {{ $service.port }}
+          env:
+            {{- range $key, $value := $.Values.commonEnv }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+          envFrom:
+            - secretRef:
+                name: {{ $.Values.postgres.connectionSecretName }}
+            - secretRef:
+                name: {{ $.Values.redis.connectionSecretName }}
+            - secretRef:
+                name: {{ $.Values.rabbitmq.connectionSecretName }}
+            - secretRef:
+                name: {{ $.Values.security.secretName }}
+          readinessProbe:
+            httpGet:
+              path: {{ default "/health" $service.healthPath }}
+              port: {{ $service.port }}
+          livenessProbe:
+            httpGet:
+              path: {{ default "/health" $service.healthPath }}
+              port: {{ $service.port }}
+---
+{{- end }}

@@ -1,0 +1,19 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "hookah-platform.fullname" . }}-migrations
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: migrations
+          image: "{{ .Values.imageRegistry }}/{{ .Values.dbMigrator.image }}:{{ .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          command: ["dotnet"]
+          args: [{{ .Values.dbMigrator.command | quote }}]
+          envFrom:
+            - secretRef:
+                name: {{ .Values.postgres.connectionSecretName }}
+            - secretRef:
+                name: {{ .Values.security.secretName }}

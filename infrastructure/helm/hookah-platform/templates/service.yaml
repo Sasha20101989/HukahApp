@@ -1,0 +1,17 @@
+{{- range $name, $service := .Values.services }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "hookah-platform.fullname" $ }}-{{ $name }}
+  labels:
+    app.kubernetes.io/name: {{ include "hookah-platform.name" $ }}
+    app.kubernetes.io/component: {{ $name }}
+spec:
+  selector:
+    app.kubernetes.io/name: {{ include "hookah-platform.name" $ }}
+    app.kubernetes.io/component: {{ $name }}
+  ports:
+    - port: {{ $service.port }}
+      targetPort: {{ $service.port }}
+---
+{{- end }}

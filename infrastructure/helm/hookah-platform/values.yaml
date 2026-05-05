@@ -1,0 +1,120 @@
+imageRegistry: ghcr.io/hookah-platform/hookah-platform
+imagePullPolicy: IfNotPresent
+
+commonEnv:
+  Jwt__Issuer: hookah-platform
+  Jwt__Audience: hookah-platform-clients
+  RabbitMQ__Enabled: "true"
+  RabbitMQ__Exchange: hookah.platform.events
+  Redis__Enabled: "true"
+
+ingress:
+  enabled: true
+  className: nginx
+  host: hookah.local
+  tlsSecretName: hookah-platform-tls
+  paths:
+    - path: /api
+      pathType: Prefix
+      service: api-gateway
+    - path: /
+      pathType: Prefix
+      service: client-app
+
+services:
+  api-gateway:
+    image: api-gateway
+    replicas: 2
+    port: 8080
+    command: HookahPlatform.ApiGateway.dll
+  tenant-service:
+    image: tenant-service
+    replicas: 2
+    port: 8080
+    command: HookahPlatform.TenantService.dll
+  auth-service:
+    image: auth-service
+    replicas: 2
+    port: 8080
+    command: HookahPlatform.AuthService.dll
+  user-service:
+    image: user-service
+    replicas: 2
+    port: 8080
+    command: HookahPlatform.UserService.dll
+  branch-service:
+    image: branch-service
+    replicas: 2
+    port: 8080
+    command: HookahPlatform.BranchService.dll
+  mixology-service:
+    image: mixology-service
+    replicas: 2
+    port: 8080
+    command: HookahPlatform.MixologyService.dll
+  inventory-service:
+    image: inventory-service
+    replicas: 2
+    port: 8080
+    command: HookahPlatform.InventoryService.dll
+  order-service:
+    image: order-service
+    replicas: 2
+    port: 8080
+    command: HookahPlatform.OrderService.dll
+  booking-service:
+    image: booking-service
+    replicas: 2
+    port: 8080
+    command: HookahPlatform.BookingService.dll
+  payment-service:
+    image: payment-service
+    replicas: 2
+    port: 8080
+    command: HookahPlatform.PaymentService.dll
+  notification-service:
+    image: notification-service
+    replicas: 2
+    port: 8080
+    command: HookahPlatform.NotificationService.dll
+  analytics-service:
+    image: analytics-service
+    replicas: 2
+    port: 8080
+    command: HookahPlatform.AnalyticsService.dll
+  review-service:
+    image: review-service
+    replicas: 2
+    port: 8080
+    command: HookahPlatform.ReviewService.dll
+  promo-service:
+    image: promo-service
+    replicas: 2
+    port: 8080
+    command: HookahPlatform.PromoService.dll
+  crm-app:
+    image: crm-app
+    replicas: 2
+    port: 3000
+    healthPath: /
+  client-app:
+    image: client-app
+    replicas: 2
+    port: 3001
+    healthPath: /
+
+postgres:
+  connectionSecretName: hookah-postgres
+
+redis:
+  connectionSecretName: hookah-redis
+
+rabbitmq:
+  connectionSecretName: hookah-rabbitmq
+
+security:
+  secretName: hookah-platform-security
+
+dbMigrator:
+  image: migrations
+  command: HookahPlatform.Migrations.dll
