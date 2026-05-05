@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { TenantBranding } from "./api";
 
 export type ClientStep = "profile" | "time" | "mix" | "payment" | "history";
 
@@ -34,11 +35,13 @@ export type ClientStore = {
   step: ClientStep;
   session: ClientSession;
   draft: BookingDraft;
+  branding?: TenantBranding;
   hydrated: boolean;
   setHydrated: (hydrated: boolean) => void;
   setStep: (step: ClientStep) => void;
   setSession: (session: Partial<ClientSession>) => void;
   setDraft: (draft: Partial<BookingDraft>) => void;
+  setBranding: (branding: TenantBranding) => void;
   logout: () => void;
 };
 
@@ -63,6 +66,7 @@ export const useClientStore = create<ClientStore>((set, get) => ({
     comment: "",
     promocode: ""
   },
+  branding: undefined,
   hydrated: false,
   setHydrated: (hydrated) => set({ hydrated }),
   setStep: (step) => set({ step }),
@@ -72,6 +76,7 @@ export const useClientStore = create<ClientStore>((set, get) => ({
     set({ session: next });
   },
   setDraft: (draft) => set((state) => ({ draft: { ...state.draft, ...draft } })),
+  setBranding: (branding) => set({ branding }),
   logout: () => {
     if (typeof window !== "undefined") {
       window.localStorage.removeItem(storageKey);

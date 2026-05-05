@@ -42,6 +42,7 @@ The page uses the same JWT refresh flow as the CRM dashboard. It does not use de
 Implemented client workflows:
 
 - profile registration/login flow;
+- tenant branding load from `GET /api/public/tenant/branding` with CSS variables `--tenant-primary` and `--tenant-accent`;
 - branch/date/time/guest selection;
 - availability lookup;
 - Redis-backed table hold flow through `/api/bookings/holds`;

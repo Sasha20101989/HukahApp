@@ -3,6 +3,7 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8
 export type AuthResponse = { userId: string; accessToken: string; refreshToken: string };
 export type UserProfile = { id: string; name: string; phone: string; email?: string | null; role: string; branchId?: string | null; status: string };
 export type Branch = { id: string; name: string; address: string; phone: string; timezone: string };
+export type TenantBranding = { tenantId: string; name: string; logoUrl?: string | null; primaryColor: string; accentColor: string };
 export type Table = { id: string; name: string; capacity: number; status?: string };
 export type Mix = { id: string; name: string; description?: string | null; bowlId: string; strength: string; tasteProfile: string; totalGrams: number; price: number; isPublic: boolean };
 export type Booking = { id: string; clientId: string; branchId: string; tableId: string; startTime: string; endTime: string; guestsCount: number; status: string; depositAmount: number; comment?: string | null };
@@ -20,6 +21,10 @@ export class ApiError extends Error {
 
 export async function getJson<T>(path: string, accessToken?: string): Promise<T> {
   return sendJson<T>("GET", path, undefined, accessToken);
+}
+
+export function getTenantBranding() {
+  return getJson<TenantBranding>("/api/public/tenant/branding");
 }
 
 export function registerClient(payload: { name: string; phone: string; email?: string; password: string }) {

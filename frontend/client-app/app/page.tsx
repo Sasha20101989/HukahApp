@@ -3,14 +3,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bell, CalendarDays, CheckCircle2, Clock3, CreditCard, Flame, History, LogOut, MessageSquare, Star, Users, WalletCards } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { buildBookingWindow, configureApiAuth, createBooking, createDepositPayment, createHold, createReview, deleteReview, getJson, getNotificationPreference, loginClient, logoutAuth, registerClient, timeLabel, updateClientProfile, updateNotificationPreference, updateReview, type Booking, type Branch, type Mix, type NotificationPreference, type Review, type Table } from "../lib/api";
+import { buildBookingWindow, configureApiAuth, createBooking, createDepositPayment, createHold, createReview, deleteReview, getJson, getNotificationPreference, getTenantBranding, loginClient, logoutAuth, registerClient, timeLabel, updateClientProfile, updateNotificationPreference, updateReview, type Booking, type Branch, type Mix, type NotificationPreference, type Review, type Table, type TenantBranding } from "../lib/api";
 import { hydrateClientSession, useClientStore } from "../lib/store";
 import { EmptyState, FieldError, FormError, LoadingState, MutationToast } from "../lib/ui";
 import { isValidEmail, isValidPhone, normalizePhone, normalizePhoneInput } from "../lib/validation";
 
 export default function ClientBookingPage() {
   const queryClient = useQueryClient();
-  const { step, session, draft, hydrated, setStep, setSession, setDraft, logout } = useClientStore();
+  const { step, session, draft, branding, hydrated, setStep, setSession, setDraft, setBranding, logout } = useClientStore();
   const [notice, setNotice] = useState("");
   const [reviewText, setReviewText] = useState("");
   const [rating, setRating] = useState(5);
@@ -38,6 +38,7 @@ export default function ClientBookingPage() {
   }, [logout, session.refreshToken]);
 
   const branches = useQuery({ queryKey: ["branches"], queryFn: () => getJson<Branch[]>("/api/branches") });
+  const brandingQuery = useQuery({ queryKey: ["tenant-branding"], queryFn: getTenantBranding });
   const mixes = useQuery({ queryKey: ["mixes"], queryFn: () => getJson<Mix[]>("/api/mixes?publicOnly=true") });
   const reviews = useQuery({ queryKey: ["reviews"], queryFn: () => getJson<Review[]>("/api/reviews") });
   const { startTime, endTime } = buildBookingWindow(draft.date, draft.time);
@@ -57,10 +58,18 @@ export default function ClientBookingPage() {
     queryFn: () => authorized((accessToken) => getNotificationPreference(session.userId!, accessToken))
   });
 
+  useEffect(() => {
+    if (!brandingQuery.data) return;
+    setBranding(brandingQuery.data);
+    document.documentElement.style.setProperty("--tenant-primary", brandingQuery.data.primaryColor);
+    document.documentElement.style.setProperty("--tenant-accent", brandingQuery.data.accentColor);
+  }, [brandingQuery.data, setBranding]);
+
+  const tenantBranding = brandingQuery.data ?? branding;
   const selectedBranch = branches.data?.find((branch) => branch.id === draft.branchId);
   const selectedMix = mixes.data?.find((mix) => mix.id === draft.mixId);
   const selectedTable = availability.data?.find((table) => table.id === draft.tableId);
-  const backendError = branches.error ?? mixes.error ?? reviews.error ?? availability.error ?? history.error ?? preferences.error;
+  const backendError = brandingQuery.error ?? branches.error ?? mixes.error ?? reviews.error ?? availability.error ?? history.error ?? preferences.error;
   const deposit = useMemo(() => (draft.guests >= 5 ? 3000 : 2000), [draft.guests]);
 
   const authMutation = useMutation({
@@ -186,7 +195,7 @@ export default function ClientBookingPage() {
   return (
     <main className="booking-shell">
       <header className="app-header">
-        <div className="logo"><span className="logo-mark"><Flame size={20} /></span><span>Hookah Place</span></div>
+        <TenantLogo branding={tenantBranding} />
         <nav className="tabs" aria-label="Client flow">
           <button className={step === "profile" ? "active" : ""} onClick={() => setStep("profile")}>Профиль</button>
           <button className={step === "time" ? "active" : ""} onClick={() => session.userId ? setStep("time") : setNotice("Сначала войдите или зарегистрируйтесь.")}>Время</button>
@@ -197,7 +206,7 @@ export default function ClientBookingPage() {
       </header>
 
       <section className="hero">
-        <div><p className="eyebrow">PWA booking</p><h1>Бронь, депозит, микс и отзывы в одном клиентском приложении.</h1></div>
+        <div><p className="eyebrow">PWA booking</p><h1>{tenantBranding?.name ?? "Hookah Place"}: бронь, депозит, микс и отзывы в одном приложении.</h1></div>
         <div className="hero-card"><WalletCards size={24} /><span>Депозит</span><strong>{deposit} ₽</strong></div>
       </section>
 
@@ -240,6 +249,10 @@ function ProfileStep({ session, setSession, onSubmit, onSaveProfile, loading, pr
   const phoneError = session.phone && !isValidPhone(session.phone) ? "Телефон должен быть в формате +79990000000." : "";
   const emailError = !isValidEmail(session.email) ? "Email должен быть корректным." : "";
   return <div className="step"><h2>Профиль клиента</h2><p className="copy">Войдите или зарегистрируйтесь по телефону и паролю. Имя и email сохраняются через backend profile API.</p><div className="form-grid"><Field label="Имя" value={session.name} onChange={(name) => setSession({ name })} placeholder="Александр" /><Field label="Телефон" type="tel" value={session.phone} onChange={(phone) => setSession({ phone: normalizePhoneInput(phone) })} placeholder="+79990000000" /><Field label="Email" type="email" value={session.email} onChange={(email) => setSession({ email })} placeholder="client@mail.com" /><Field label="Пароль" type="password" value={session.password} onChange={(password) => setSession({ password })} placeholder="Минимум 6 символов" /></div><FieldError message={phoneError || emailError || passwordError} /><div className="action-row"><button className="primary" onClick={onSubmit} disabled={loading || !session.name.trim() || !isValidPhone(session.phone) || !isValidEmail(session.email) || session.password.length < 6}><Users size={18} />{loading ? "Входим" : "Продолжить"}</button>{session.userId && <button className="primary secondary" onClick={onSaveProfile} disabled={loading || !isValidEmail(session.email)}>Сохранить профиль</button>}</div>{session.userId && <PreferencePanel preferences={preferences} onSave={onPreferences} />}</div>;
+}
+
+function TenantLogo({ branding }: { branding?: TenantBranding }) {
+  return <div className="logo">{branding?.logoUrl ? <img className="logo-image" src={branding.logoUrl} alt={branding.name} /> : <span className="logo-mark"><Flame size={20} /></span>}<span>{branding?.name ?? "Hookah Place"}</span></div>;
 }
 
 function PreferencePanel({ preferences, onSave }: { preferences?: NotificationPreference; onSave: (value: Omit<NotificationPreference, "userId">) => void }) {

@@ -114,7 +114,8 @@ public static class EndpointAccessPolicy
         "/api/mixes",
         "/api/reviews",
         "/api/bookings/availability",
-        "/api/payments/status"
+        "/api/payments/status",
+        "/api/public/tenant"
     ];
 
     private static readonly string[] InternalPrefixes =

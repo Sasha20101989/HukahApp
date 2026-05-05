@@ -22,6 +22,7 @@ public static class ServiceCatalog
     public static readonly ServiceRoute[] Routes =
     [
         new("/api/tenants", "tenant-service"),
+        new("/api/public/tenant", "tenant-service"),
         new("/api/auth", "auth-service"),
         new("/api/users", "user-service"),
         new("/api/staff", "user-service"),

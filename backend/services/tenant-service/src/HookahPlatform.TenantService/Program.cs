@@ -1,5 +1,6 @@
 using HookahPlatform.BuildingBlocks;
 using HookahPlatform.BuildingBlocks.Persistence;
+using HookahPlatform.BuildingBlocks.Tenancy;
 using HookahPlatform.Contracts;
 using HookahPlatform.TenantService.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -11,6 +12,19 @@ builder.AddPostgresDbContext<TenantDbContext>();
 var app = builder.Build();
 app.UseHookahServiceDefaults();
 app.MapPersistenceHealth<TenantDbContext>("tenant-service");
+
+app.MapGet("/api/public/tenant/branding", async (HttpContext httpContext, TenantDbContext db, CancellationToken cancellationToken) =>
+{
+    var tenant = await ResolveRequestedTenantAsync(httpContext, db, cancellationToken);
+    if (tenant is null) return HttpResults.NotFound("Tenant", TenantConstants.DemoTenantId);
+
+    return Results.Ok(new TenantBrandingDto(
+        tenant.Id,
+        tenant.Name,
+        LogoUrl: null,
+        PrimaryColor: "#1d765f",
+        AccentColor: "#b86b20"));
+});
 
 app.MapGet("/api/tenants", async (TenantDbContext db, CancellationToken cancellationToken) =>
 {
@@ -108,3 +122,22 @@ app.MapPut("/api/tenants/{id:guid}/settings", async (Guid id, TenantSettingsDto 
 
 app.Run();
 
+static async Task<TenantRecord?> ResolveRequestedTenantAsync(HttpContext httpContext, TenantDbContext db, CancellationToken cancellationToken)
+{
+    if (httpContext.Request.Headers.TryGetValue(TenantHeaders.TenantId, out var tenantIdHeader) &&
+        Guid.TryParse(tenantIdHeader.ToString(), out var tenantId))
+    {
+        return await db.Tenants.AsNoTracking().FirstOrDefaultAsync(x => x.Id == tenantId && x.IsActive, cancellationToken);
+    }
+
+    if (httpContext.Request.Headers.TryGetValue(TenantHeaders.TenantSlug, out var tenantSlugHeader))
+    {
+        var slug = tenantSlugHeader.ToString();
+        if (!string.IsNullOrWhiteSpace(slug))
+        {
+            return await db.Tenants.AsNoTracking().FirstOrDefaultAsync(x => x.Slug == slug && x.IsActive, cancellationToken);
+        }
+    }
+
+    return await db.Tenants.AsNoTracking().FirstOrDefaultAsync(x => x.Id == TenantConstants.DemoTenantId && x.IsActive, cancellationToken);
+}

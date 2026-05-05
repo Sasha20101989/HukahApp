@@ -5,9 +5,11 @@
   --line: #d6e0da;
   --surface: #ffffff;
   --soft: #edf6f1;
-  --brand: #1d765f;
+  --tenant-primary: #1d765f;
+  --tenant-accent: #b86b20;
+  --brand: var(--tenant-primary);
   --brand-dark: #172f29;
-  --accent: #b86b20;
+  --accent: var(--tenant-accent);
   --ok: #277a38;
   --shadow: 0 18px 50px rgba(18, 32, 27, 0.09);
 }
@@ -20,6 +22,7 @@ button:disabled { opacity: .68; cursor: wait; }
 .app-header { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 18px; }
 .logo { display: flex; align-items: center; gap: 10px; font-size: 21px; font-weight: 850; }
 .logo-mark { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 14px; background: var(--brand-dark); color: white; }
+.logo-image { width: 40px; height: 40px; object-fit: cover; border-radius: 14px; border: 1px solid var(--line); background: white; }
 .tabs { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .tabs button { min-height: 38px; border-radius: 999px; background: rgba(255,255,255,.78); border: 1px solid var(--line); color: var(--muted); padding: 0 13px; }
 .tabs button.active { background: var(--brand-dark); color: white; border-color: var(--brand-dark); }

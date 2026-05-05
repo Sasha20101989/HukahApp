@@ -19,6 +19,13 @@ public sealed record TenantSettingsDto(
     string DefaultCurrency,
     bool RequireDeposit);
 
+public sealed record TenantBrandingDto(
+    Guid TenantId,
+    string Name,
+    string? LogoUrl,
+    string PrimaryColor,
+    string AccentColor);
+
 public sealed record CreateTenantRequest(
     string Slug,
     string Name);
@@ -27,4 +34,3 @@ public sealed record UpdateTenantRequest(
     string? Slug,
     string? Name,
     bool? IsActive);
-
