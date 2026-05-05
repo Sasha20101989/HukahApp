@@ -1,4 +1,5 @@
 using HookahPlatform.BuildingBlocks;
+using HookahPlatform.BuildingBlocks.Auditing;
 using HookahPlatform.BuildingBlocks.Persistence;
 using HookahPlatform.AuthService.Persistence;
 using HookahPlatform.BuildingBlocks.Security;
@@ -63,11 +64,12 @@ app.MapPost("/api/auth/register", async (RegisterRequest request, AuthDbContext 
     return Results.Ok(issuedTokens);
 });
 
-app.MapPost("/api/auth/login", async (LoginRequest request, AuthDbContext db, JwtTokenService tokens, IDistributedCache cache, CancellationToken cancellationToken) =>
+app.MapPost("/api/auth/login", async (LoginRequest request, HttpContext context, AuthDbContext db, JwtTokenService tokens, IDistributedCache cache, IAuditLogWriter audit, CancellationToken cancellationToken) =>
 {
     var user = await db.Users.AsNoTracking().FirstOrDefaultAsync(candidate => candidate.Phone == request.Phone, cancellationToken);
     if (user is null || !PasswordHasher.Verify(request.Password, user.PasswordHash))
     {
+        await audit.WriteAsync(null, user?.Id, "auth.login", "user", user?.Id.ToString(), "failure", AuditLogContext.CorrelationId(context), new { request.Phone }, cancellationToken);
         return Results.Unauthorized();
     }
 
@@ -77,21 +79,24 @@ app.MapPost("/api/auth/login", async (LoginRequest request, AuthDbContext db, Jw
     db.RefreshTokens.Add(refreshToken);
     await db.SaveChangesAsync(cancellationToken);
     await StoreRefreshSessionAsync(cache, refreshToken, role.Code, cancellationToken);
+    await audit.WriteAsync(null, user.Id, "auth.login", "user", user.Id.ToString(), "success", AuditLogContext.CorrelationId(context), new { role.Code }, cancellationToken);
 
     return Results.Ok(issuedTokens);
 });
 
-app.MapPost("/api/auth/refresh", async (RefreshRequest request, AuthDbContext db, JwtTokenService tokens, IDistributedCache cache, CancellationToken cancellationToken) =>
+app.MapPost("/api/auth/refresh", async (RefreshRequest request, HttpContext context, AuthDbContext db, JwtTokenService tokens, IDistributedCache cache, IAuditLogWriter audit, CancellationToken cancellationToken) =>
 {
     var tokenHash = HashRefreshToken(request.RefreshToken);
     var cachedSession = await cache.GetJsonAsync<AuthRefreshSession>(RefreshSessionKey(tokenHash), cancellationToken);
     if (cachedSession is { RevokedAt: null } && cachedSession.ExpiresAt <= DateTimeOffset.UtcNow)
     {
         await cache.RemoveAsync(RefreshSessionKey(tokenHash), cancellationToken);
+        await audit.WriteAsync(null, cachedSession.UserId, "auth.refresh", "refresh_token", null, "failure", AuditLogContext.CorrelationId(context), new { reason = "expired_cache" }, cancellationToken);
         return Results.Unauthorized();
     }
     if (cachedSession is { RevokedAt: not null })
     {
+        await audit.WriteAsync(null, cachedSession.UserId, "auth.refresh", "refresh_token", null, "failure", AuditLogContext.CorrelationId(context), new { reason = "revoked_cache" }, cancellationToken);
         return Results.Unauthorized();
     }
 
@@ -102,12 +107,14 @@ app.MapPost("/api/auth/refresh", async (RefreshRequest request, AuthDbContext db
         cancellationToken);
     if (storedToken is null)
     {
+        await audit.WriteAsync(null, null, "auth.refresh", "refresh_token", null, "failure", AuditLogContext.CorrelationId(context), new { reason = "not_found" }, cancellationToken);
         return Results.Unauthorized();
     }
 
     var user = await db.Users.AsNoTracking().FirstOrDefaultAsync(candidate => candidate.Id == storedToken.UserId, cancellationToken);
     if (user is null)
     {
+        await audit.WriteAsync(null, storedToken.UserId, "auth.refresh", "refresh_token", storedToken.Id.ToString(), "failure", AuditLogContext.CorrelationId(context), new { reason = "user_not_found" }, cancellationToken);
         return Results.Unauthorized();
     }
 
@@ -119,11 +126,12 @@ app.MapPost("/api/auth/refresh", async (RefreshRequest request, AuthDbContext db
     await db.SaveChangesAsync(cancellationToken);
     await RevokeRefreshSessionAsync(cache, storedToken, role.Code, cancellationToken);
     await StoreRefreshSessionAsync(cache, refreshToken, role.Code, cancellationToken);
+    await audit.WriteAsync(null, user.Id, "auth.refresh", "refresh_token", storedToken.Id.ToString(), "success", AuditLogContext.CorrelationId(context), new { role.Code }, cancellationToken);
 
     return Results.Ok(issuedTokens);
 });
 
-app.MapPost("/api/auth/logout", async (RefreshRequest request, AuthDbContext db, IDistributedCache cache, CancellationToken cancellationToken) =>
+app.MapPost("/api/auth/logout", async (RefreshRequest request, HttpContext context, AuthDbContext db, IDistributedCache cache, IAuditLogWriter audit, CancellationToken cancellationToken) =>
 {
     var tokenHash = HashRefreshToken(request.RefreshToken);
     var storedToken = await db.RefreshTokens.FirstOrDefaultAsync(candidate => candidate.TokenHash == tokenHash && candidate.RevokedAt == null, cancellationToken);
@@ -133,6 +141,7 @@ app.MapPost("/api/auth/logout", async (RefreshRequest request, AuthDbContext db,
         await db.SaveChangesAsync(cancellationToken);
     }
     await cache.RemoveAsync(RefreshSessionKey(tokenHash), cancellationToken);
+    await audit.WriteAsync(null, storedToken?.UserId, "auth.logout", "refresh_token", storedToken?.Id.ToString(), storedToken is null ? "failure" : "success", AuditLogContext.CorrelationId(context), null, cancellationToken);
 
     return Results.NoContent();
 });

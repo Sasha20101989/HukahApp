@@ -1,4 +1,5 @@
 using HookahPlatform.BuildingBlocks;
+using HookahPlatform.BuildingBlocks.Auditing;
 using HookahPlatform.BuildingBlocks.Persistence;
 using HookahPlatform.BuildingBlocks.Security;
 using HookahPlatform.BuildingBlocks.Tenancy;
@@ -99,7 +100,7 @@ app.MapGet("/api/roles", async (UserDbContext db, ITenantContext tenantContext, 
     return Results.Ok(result);
 });
 
-app.MapPost("/api/roles", async (CreateRoleRequest request, UserDbContext db, ITenantContext tenantContext, CancellationToken cancellationToken) =>
+app.MapPost("/api/roles", async (CreateRoleRequest request, HttpContext context, UserDbContext db, ITenantContext tenantContext, IAuditLogWriter audit, CancellationToken cancellationToken) =>
 {
     var tenantId = tenantContext.GetTenantIdOrDemo();
 
@@ -142,11 +143,12 @@ app.MapPost("/api/roles", async (CreateRoleRequest request, UserDbContext db, IT
     };
     db.Roles.Add(entity);
     await db.SaveChangesAsync(cancellationToken);
+    await audit.WriteAsync(tenantId, AuditLogContext.ForwardedUserId(context), "role.create", "role", entity.Id.ToString(), "success", AuditLogContext.CorrelationId(context), new { entity.Code, entity.Name }, cancellationToken);
 
     return Results.Created($"/api/roles/{entity.Id}", new RoleDto(entity.Id, entity.Name, entity.Code, entity.IsSystem, entity.IsActive, Array.Empty<string>()));
 });
 
-app.MapPatch("/api/roles/{id:guid}", async (Guid id, UpdateRoleRequest request, UserDbContext db, ITenantContext tenantContext, CancellationToken cancellationToken) =>
+app.MapPatch("/api/roles/{id:guid}", async (Guid id, UpdateRoleRequest request, HttpContext context, UserDbContext db, ITenantContext tenantContext, IAuditLogWriter audit, CancellationToken cancellationToken) =>
 {
     var tenantId = tenantContext.GetTenantIdOrDemo();
     var role = await db.Roles.FirstOrDefaultAsync(candidate => candidate.Id == id && candidate.TenantId == tenantId, cancellationToken);
@@ -177,6 +179,7 @@ app.MapPatch("/api/roles/{id:guid}", async (Guid id, UpdateRoleRequest request, 
     }
 
     await db.SaveChangesAsync(cancellationToken);
+    await audit.WriteAsync(tenantId, AuditLogContext.ForwardedUserId(context), "role.update", "role", role.Id.ToString(), "success", AuditLogContext.CorrelationId(context), new { role.Code, role.Name, role.IsActive }, cancellationToken);
 
     var roleIdToPermissionCodes = await LoadRolePermissionCodesAsync(db, new[] { role.Id }, cancellationToken);
     var permissions = IsSystemOwnerRole(role)
@@ -186,7 +189,7 @@ app.MapPatch("/api/roles/{id:guid}", async (Guid id, UpdateRoleRequest request, 
     return Results.Ok(new RoleDto(role.Id, role.Name, role.Code, role.IsSystem, role.IsActive, permissions));
 });
 
-app.MapDelete("/api/roles/{id:guid}", async (Guid id, UserDbContext db, ITenantContext tenantContext, CancellationToken cancellationToken) =>
+app.MapDelete("/api/roles/{id:guid}", async (Guid id, HttpContext context, UserDbContext db, ITenantContext tenantContext, IAuditLogWriter audit, CancellationToken cancellationToken) =>
 {
     var tenantId = tenantContext.GetTenantIdOrDemo();
     var role = await db.Roles.FirstOrDefaultAsync(candidate => candidate.Id == id && candidate.TenantId == tenantId, cancellationToken);
@@ -212,10 +215,11 @@ app.MapDelete("/api/roles/{id:guid}", async (Guid id, UserDbContext db, ITenantC
     db.RolePermissions.RemoveRange(roleLinks);
     db.Roles.Remove(role);
     await db.SaveChangesAsync(cancellationToken);
+    await audit.WriteAsync(tenantId, AuditLogContext.ForwardedUserId(context), "role.delete", "role", id.ToString(), "success", AuditLogContext.CorrelationId(context), new { role.Code, role.Name }, cancellationToken);
     return Results.NoContent();
 });
 
-app.MapPut("/api/roles/{id:guid}/permissions", async (Guid id, UpdateRolePermissionsRequest request, UserDbContext db, ITenantContext tenantContext, CancellationToken cancellationToken) =>
+app.MapPut("/api/roles/{id:guid}/permissions", async (Guid id, UpdateRolePermissionsRequest request, HttpContext context, UserDbContext db, ITenantContext tenantContext, IAuditLogWriter audit, CancellationToken cancellationToken) =>
 {
     var tenantId = tenantContext.GetTenantIdOrDemo();
     var role = await db.Roles.FirstOrDefaultAsync(candidate => candidate.Id == id && candidate.TenantId == tenantId, cancellationToken);
@@ -230,6 +234,7 @@ app.MapPut("/api/roles/{id:guid}/permissions", async (Guid id, UpdateRolePermiss
         var existing = db.RolePermissions.Where(link => link.RoleId == role.Id);
         db.RolePermissions.RemoveRange(existing);
         await db.SaveChangesAsync(cancellationToken);
+        await audit.WriteAsync(tenantId, AuditLogContext.ForwardedUserId(context), "role.permissions.update", "role", role.Id.ToString(), "success", AuditLogContext.CorrelationId(context), new { role.Code, Permissions = new[] { "*" } }, cancellationToken);
         return Results.Ok(new RoleDto(role.Id, role.Name, role.Code, role.IsSystem, role.IsActive, new[] { "*" }));
     }
 
@@ -271,6 +276,7 @@ app.MapPut("/api/roles/{id:guid}/permissions", async (Guid id, UpdateRolePermiss
     }
 
     await db.SaveChangesAsync(cancellationToken);
+    await audit.WriteAsync(tenantId, AuditLogContext.ForwardedUserId(context), "role.permissions.update", "role", role.Id.ToString(), "success", AuditLogContext.CorrelationId(context), new { role.Code, Permissions = canonicalRequested }, cancellationToken);
     return Results.Ok(new RoleDto(
         role.Id,
         role.Name,

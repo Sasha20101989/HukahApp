@@ -1,4 +1,5 @@
 using HookahPlatform.Contracts;
+using HookahPlatform.BuildingBlocks.Auditing;
 using HookahPlatform.BuildingBlocks.Persistence;
 using HookahPlatform.BuildingBlocks.Security;
 using HookahPlatform.BuildingBlocks.Tenancy;
@@ -22,6 +23,7 @@ public static class ApiDefaults
         builder.Services.AddSingleton(new ServiceInfo(serviceName));
         builder.Services.AddScoped<TenantContext>();
         builder.Services.AddScoped<ITenantContext>(sp => sp.GetRequiredService<TenantContext>());
+        builder.Services.AddScoped<IAuditLogWriter, PostgresAuditLogWriter>();
         builder.Services.AddTransient<ServiceAuthenticationHandler>();
         builder.Services.AddSingleton<IHttpMessageHandlerBuilderFilter, ServiceAuthenticationHttpMessageHandlerFilter>();
         builder.Services.AddHttpClient();

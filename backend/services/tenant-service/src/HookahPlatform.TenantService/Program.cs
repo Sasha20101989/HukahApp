@@ -1,4 +1,5 @@
 using HookahPlatform.BuildingBlocks;
+using HookahPlatform.BuildingBlocks.Auditing;
 using HookahPlatform.BuildingBlocks.Persistence;
 using HookahPlatform.BuildingBlocks.Tenancy;
 using HookahPlatform.Contracts;
@@ -149,7 +150,7 @@ app.MapGet("/api/tenants/{id:guid}/settings", async (Guid id, TenantDbContext db
     return Results.Ok(new TenantSettingsDto(settings.TenantId, settings.DefaultTimezone, settings.DefaultCurrency, settings.RequireDeposit));
 });
 
-app.MapPut("/api/tenants/{id:guid}/settings", async (Guid id, TenantSettingsDto request, TenantDbContext db, CancellationToken cancellationToken) =>
+app.MapPut("/api/tenants/{id:guid}/settings", async (Guid id, TenantSettingsDto request, HttpContext context, TenantDbContext db, IAuditLogWriter audit, CancellationToken cancellationToken) =>
 {
     if (id != request.TenantId) return HttpResults.Validation("TenantId mismatch.");
     var settings = await db.TenantSettings.FirstOrDefaultAsync(x => x.TenantId == id, cancellationToken);
@@ -160,6 +161,7 @@ app.MapPut("/api/tenants/{id:guid}/settings", async (Guid id, TenantSettingsDto 
     settings.RequireDeposit = request.RequireDeposit;
 
     await db.SaveChangesAsync(cancellationToken);
+    await audit.WriteAsync(id, AuditLogContext.ForwardedUserId(context), "tenant.settings.update", "tenant", id.ToString(), "success", AuditLogContext.CorrelationId(context), new { settings.DefaultTimezone, settings.DefaultCurrency, settings.RequireDeposit }, cancellationToken);
     return Results.Ok(new TenantSettingsDto(settings.TenantId, settings.DefaultTimezone, settings.DefaultCurrency, settings.RequireDeposit));
 });
 

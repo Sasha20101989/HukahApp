@@ -1,5 +1,7 @@
 using HookahPlatform.BuildingBlocks;
+using HookahPlatform.BuildingBlocks.Auditing;
 using HookahPlatform.BuildingBlocks.Persistence;
+using HookahPlatform.BuildingBlocks.Tenancy;
 using HookahPlatform.PaymentService.Persistence;
 using HookahPlatform.Contracts;
 using Microsoft.EntityFrameworkCore;
@@ -224,7 +226,7 @@ app.MapGet("/api/payments/{id:guid}", async (Guid id, PaymentDbContext db, Cance
         ? Results.Ok(payment)
         : HttpResults.NotFound("Payment", id));
 
-app.MapPost("/api/payments/{id:guid}/refund", async (Guid id, RefundRequest request, PaymentDbContext db, IEventPublisher events, CancellationToken cancellationToken) =>
+app.MapPost("/api/payments/{id:guid}/refund", async (Guid id, RefundRequest request, HttpContext context, PaymentDbContext db, IEventPublisher events, ITenantContext tenantContext, IAuditLogWriter audit, CancellationToken cancellationToken) =>
 {
     var payment = await db.Payments.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
     if (payment is null)
@@ -254,6 +256,7 @@ app.MapPost("/api/payments/{id:guid}/refund", async (Guid id, RefundRequest requ
     var outboxMessage = db.AddOutboxMessage(refunded);
     await db.SaveChangesAsync(cancellationToken);
     await db.ForwardAndMarkOutboxAsync(events, refunded, outboxMessage, cancellationToken);
+    await audit.WriteAsync(AuditLogContext.TenantId(tenantContext), AuditLogContext.ForwardedUserId(context), "payment.refund", "payment", id.ToString(), "success", AuditLogContext.CorrelationId(context), new { request.Amount, totalRefunded, Reason = reason, payment.BookingId, payment.OrderId }, cancellationToken);
     return Results.Ok(new { paymentId = id, status, request.Amount, totalRefunded, Reason = reason });
 });
 

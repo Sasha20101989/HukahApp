@@ -1,5 +1,7 @@
 using HookahPlatform.BuildingBlocks;
+using HookahPlatform.BuildingBlocks.Auditing;
 using HookahPlatform.BuildingBlocks.Persistence;
+using HookahPlatform.BuildingBlocks.Tenancy;
 using HookahPlatform.InventoryService.Persistence;
 using HookahPlatform.Contracts;
 using Microsoft.EntityFrameworkCore;
@@ -112,7 +114,7 @@ app.MapPost("/api/inventory/out", async (InventoryOutRequest request, InventoryD
     return Results.Ok(item);
 });
 
-app.MapPost("/api/inventory/adjustment", async (InventoryAdjustmentRequest request, InventoryDbContext db, IEventPublisher events, CancellationToken cancellationToken) =>
+app.MapPost("/api/inventory/adjustment", async (InventoryAdjustmentRequest request, HttpContext context, InventoryDbContext db, IEventPublisher events, ITenantContext tenantContext, IAuditLogWriter audit, CancellationToken cancellationToken) =>
 {
     if (request.BranchId == Guid.Empty || request.TobaccoId == Guid.Empty) return HttpResults.Validation("Branch and tobacco are required.");
     if (request.NewStockGrams < 0) return HttpResults.Validation("New stock amount cannot be negative.");
@@ -127,6 +129,7 @@ app.MapPost("/api/inventory/adjustment", async (InventoryAdjustmentRequest reque
     var outboxMessages = db.AddOutboxMessages(outboxEvents);
     await db.SaveChangesAsync(cancellationToken);
     await db.ForwardAndMarkOutboxAsync(events, outboxEvents, outboxMessages, cancellationToken);
+    await audit.WriteAsync(AuditLogContext.TenantId(tenantContext), AuditLogContext.ForwardedUserId(context), "inventory.adjustment", "inventory_item", item.Id.ToString(), "success", AuditLogContext.CorrelationId(context), new { request.BranchId, request.TobaccoId, PreviousStockGrams = request.NewStockGrams - delta, request.NewStockGrams, Delta = delta }, cancellationToken);
 
     return Results.Ok(item);
 });
