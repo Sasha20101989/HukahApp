@@ -18,7 +18,7 @@ var app = builder.Build();
 app.UseHookahServiceDefaults();
 app.MapPersistenceHealth<PaymentDbContext>("payment-service");
 
-app.MapPost("/api/payments/create", async (CreatePaymentRequest request, HttpContext context, PaymentDbContext db, IHttpClientFactory httpClientFactory, IConfiguration configuration, CancellationToken cancellationToken) =>
+app.MapPost("/api/payments/create", async (CreatePaymentRequest request, HttpContext context, PaymentDbContext db, IHttpClientFactory httpClientFactory, IConfiguration configuration, ITenantContext tenantContext, CancellationToken cancellationToken) =>
 {
     if (!CanActForClient(context, request.ClientId))
     {
@@ -48,6 +48,14 @@ app.MapPost("/api/payments/create", async (CreatePaymentRequest request, HttpCon
     {
         return HttpResults.Validation("Payment currency, provider and type are required.");
     }
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var providerConfig = await db.TenantPaymentProviders.AsNoTracking().FirstOrDefaultAsync(
+        candidate => candidate.TenantId == tenantId && candidate.Provider == provider && candidate.IsActive,
+        cancellationToken);
+    if (providerConfig is null)
+    {
+        return HttpResults.Conflict($"Payment provider '{provider}' is not configured for tenant.");
+    }
 
     var discount = 0m;
     if (!string.IsNullOrWhiteSpace(request.Promocode))
@@ -65,6 +73,7 @@ app.MapPost("/api/payments/create", async (CreatePaymentRequest request, HttpCon
     var payment = new PaymentEntity
     {
         Id = Guid.NewGuid(),
+        TenantId = tenantId,
         ClientId = request.ClientId,
         OrderId = request.OrderId,
         BookingId = request.BookingId,
@@ -84,7 +93,7 @@ app.MapPost("/api/payments/create", async (CreatePaymentRequest request, HttpCon
     await db.SaveChangesAsync(cancellationToken);
 
     var returnUrl = BuildReturnUrl(request.ReturnUrl, payment);
-    var paymentUrl = BuildPaymentUrl(payment, request.ReturnUrl, configuration);
+    var paymentUrl = BuildPaymentUrl(payment, providerConfig, request.ReturnUrl, configuration);
     return Results.Ok(new CreatePaymentResponse(
         payment.Id,
         paymentUrl,
@@ -95,16 +104,57 @@ app.MapPost("/api/payments/create", async (CreatePaymentRequest request, HttpCon
         payment.DiscountAmount));
 });
 
+app.MapGet("/api/payments/providers", async (PaymentDbContext db, ITenantContext tenantContext, CancellationToken cancellationToken) =>
+{
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var providers = await db.TenantPaymentProviders.AsNoTracking()
+        .Where(provider => provider.TenantId == tenantId)
+        .OrderBy(provider => provider.Provider)
+        .Select(provider => new TenantPaymentProviderDto(provider.Id, provider.Provider, provider.DisplayName, provider.IsActive, provider.CreatedAt, provider.UpdatedAt))
+        .ToListAsync(cancellationToken);
+    return Results.Ok(providers);
+});
+
+app.MapPut("/api/payments/providers/{provider}", async (string provider, UpsertTenantPaymentProviderRequest request, HttpContext context, PaymentDbContext db, ITenantContext tenantContext, IAuditLogWriter audit, CancellationToken cancellationToken) =>
+{
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var providerCode = provider.Trim().ToUpperInvariant();
+    if (string.IsNullOrWhiteSpace(providerCode)) return HttpResults.Validation("Provider is required.");
+    var displayName = (request.DisplayName ?? providerCode).Trim();
+    if (string.IsNullOrWhiteSpace(displayName)) return HttpResults.Validation("Display name is required.");
+    if (string.IsNullOrWhiteSpace(request.EncryptedCredentials)) return HttpResults.Validation("Encrypted credentials are required.");
+    if (string.IsNullOrWhiteSpace(request.WebhookSecret)) return HttpResults.Validation("Webhook secret is required.");
+
+    var now = DateTimeOffset.UtcNow;
+    var entity = await db.TenantPaymentProviders.FirstOrDefaultAsync(candidate => candidate.TenantId == tenantId && candidate.Provider == providerCode && candidate.DisplayName == displayName, cancellationToken);
+    if (entity is null)
+    {
+        entity = new TenantPaymentProviderEntity { Id = Guid.NewGuid(), TenantId = tenantId, Provider = providerCode, DisplayName = displayName, CreatedAt = now };
+        db.TenantPaymentProviders.Add(entity);
+    }
+    entity.EncryptedCredentials = request.EncryptedCredentials.Trim();
+    entity.WebhookSecretHash = HashSecret(request.WebhookSecret);
+    entity.IsActive = request.IsActive;
+    entity.UpdatedAt = now;
+    await db.SaveChangesAsync(cancellationToken);
+    await audit.WriteAsync(tenantId, AuditLogContext.ForwardedUserId(context), "payment.provider.upsert", "tenant_payment_provider", entity.Id.ToString(), "success", AuditLogContext.CorrelationId(context), new { entity.Provider, entity.DisplayName, entity.IsActive }, cancellationToken);
+    return Results.Ok(new TenantPaymentProviderDto(entity.Id, entity.Provider, entity.DisplayName, entity.IsActive, entity.CreatedAt, entity.UpdatedAt));
+});
+
 app.MapPost("/api/payments/webhook/yookassa", async (YooKassaWebhook request, HttpContext context, PaymentDbContext db, IEventPublisher events, IHttpClientFactory httpClientFactory, IConfiguration configuration, CancellationToken cancellationToken) =>
 {
-    if (!IsAuthorizedYooKassaWebhook(context, configuration))
-    {
-        return Results.Json(new ProblemDetailsDto("invalid_webhook_signature", "Payment webhook signature is invalid."), statusCode: StatusCodes.Status401Unauthorized);
-    }
-
     if (request.PaymentId == Guid.Empty)
     {
         return HttpResults.Validation("Payment id is required.");
+    }
+    var tenantId = request.TenantId ?? ResolveTenantId(context);
+    if (tenantId is null) return HttpResults.Validation("Webhook tenant id is required.");
+    var providerConfig = await db.TenantPaymentProviders.AsNoTracking().FirstOrDefaultAsync(
+        candidate => candidate.TenantId == tenantId && candidate.Provider == "YOOKASSA" && candidate.IsActive,
+        cancellationToken);
+    if (providerConfig is null || !IsAuthorizedYooKassaWebhook(context, providerConfig))
+    {
+        return Results.Json(new ProblemDetailsDto("invalid_webhook_signature", "Payment webhook signature is invalid."), statusCode: StatusCodes.Status401Unauthorized);
     }
 
     var externalPaymentId = (request.ExternalPaymentId ?? string.Empty).Trim();
@@ -114,7 +164,7 @@ app.MapPost("/api/payments/webhook/yookassa", async (YooKassaWebhook request, Ht
     }
 
     var externalOwnerId = await db.Payments.AsNoTracking()
-        .Where(candidate => candidate.ExternalPaymentId == externalPaymentId && candidate.Id != request.PaymentId)
+        .Where(candidate => candidate.TenantId == tenantId && candidate.ExternalPaymentId == externalPaymentId && candidate.Id != request.PaymentId)
         .Select(candidate => (Guid?)candidate.Id)
         .FirstOrDefaultAsync(cancellationToken);
     if (externalOwnerId is not null)
@@ -122,7 +172,7 @@ app.MapPost("/api/payments/webhook/yookassa", async (YooKassaWebhook request, Ht
         return HttpResults.Conflict("External payment id is already linked to another payment.");
     }
 
-    var payment = await db.Payments.FirstOrDefaultAsync(candidate => candidate.Id == request.PaymentId, cancellationToken);
+    var payment = await db.Payments.FirstOrDefaultAsync(candidate => candidate.Id == request.PaymentId && candidate.TenantId == tenantId, cancellationToken);
     if (payment is null)
     {
         return HttpResults.NotFound("Payment", request.PaymentId);
@@ -189,14 +239,15 @@ app.MapPost("/api/payments/webhook/yookassa", async (YooKassaWebhook request, Ht
     return Results.Ok(new WebhookPaymentResponse(payment.Id, payment.Status, externalPaymentId, false));
 });
 
-app.MapGet("/api/payments", async (Guid? clientId, Guid? orderId, Guid? bookingId, string? status, string? type, HttpContext context, PaymentDbContext db, CancellationToken cancellationToken) =>
+app.MapGet("/api/payments", async (Guid? clientId, Guid? orderId, Guid? bookingId, string? status, string? type, HttpContext context, PaymentDbContext db, ITenantContext tenantContext, CancellationToken cancellationToken) =>
 {
     if (!IsServiceRequest(context) && !HasForwardedPermission(context, PermissionCodes.OrdersManage))
     {
         return Results.Json(new ProblemDetailsDto("forbidden", "Payment list is available only to order managers."), statusCode: StatusCodes.Status403Forbidden);
     }
 
-    var query = db.Payments.AsNoTracking();
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var query = db.Payments.AsNoTracking().Where(payment => payment.TenantId == tenantId);
     if (clientId is not null) query = query.Where(payment => payment.ClientId == clientId);
     if (orderId is not null) query = query.Where(payment => payment.OrderId == orderId);
     if (bookingId is not null) query = query.Where(payment => payment.BookingId == bookingId);
@@ -228,7 +279,8 @@ app.MapGet("/api/payments/{id:guid}", async (Guid id, PaymentDbContext db, Cance
 
 app.MapPost("/api/payments/{id:guid}/refund", async (Guid id, RefundRequest request, HttpContext context, PaymentDbContext db, IEventPublisher events, ITenantContext tenantContext, IAuditLogWriter audit, CancellationToken cancellationToken) =>
 {
-    var payment = await db.Payments.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var payment = await db.Payments.FirstOrDefaultAsync(candidate => candidate.Id == id && candidate.TenantId == tenantId, cancellationToken);
     if (payment is null)
     {
         return HttpResults.NotFound("Payment", id);
@@ -339,7 +391,7 @@ static bool CanActForClient(HttpContext context, Guid clientId)
            GetForwardedUserId(context) == clientId;
 }
 
-static string BuildPaymentUrl(PaymentEntity payment, string? returnUrl, IConfiguration configuration)
+static string BuildPaymentUrl(PaymentEntity payment, TenantPaymentProviderEntity providerConfig, string? returnUrl, IConfiguration configuration)
 {
     var checkoutBaseUrl = configuration["Payments:CheckoutBaseUrl"];
     if (!IsProviderRedirectEnabled(configuration))
@@ -349,7 +401,7 @@ static string BuildPaymentUrl(PaymentEntity payment, string? returnUrl, IConfigu
 
     checkoutBaseUrl = checkoutBaseUrl!.Trim();
     var separator = checkoutBaseUrl.Contains('?') ? '&' : '?';
-    return $"{checkoutBaseUrl}{separator}paymentId={payment.Id}&amount={payment.PayableAmount:0.##}&currency={Uri.EscapeDataString(payment.Currency)}&returnUrl={Uri.EscapeDataString(BuildReturnUrl(returnUrl, payment))}";
+    return $"{checkoutBaseUrl}{separator}paymentId={payment.Id}&tenantId={payment.TenantId}&providerAccount={Uri.EscapeDataString(providerConfig.DisplayName)}&amount={payment.PayableAmount:0.##}&currency={Uri.EscapeDataString(payment.Currency)}&returnUrl={Uri.EscapeDataString(BuildReturnUrl(returnUrl, payment))}";
 }
 
 static string BuildReturnUrl(string? returnUrl, PaymentEntity payment)
@@ -366,18 +418,26 @@ static bool IsProviderRedirectEnabled(IConfiguration configuration)
     return !string.IsNullOrWhiteSpace(configuration["Payments:CheckoutBaseUrl"]);
 }
 
-static bool IsAuthorizedYooKassaWebhook(HttpContext context, IConfiguration configuration)
+static bool IsAuthorizedYooKassaWebhook(HttpContext context, TenantPaymentProviderEntity providerConfig)
 {
-    var secret = configuration["Payments:YooKassa:WebhookSecret"];
-    if (string.IsNullOrWhiteSpace(secret)) return true;
-
     var provided = context.Request.Headers["X-Webhook-Secret"].ToString();
     if (string.IsNullOrWhiteSpace(provided)) return false;
 
-    var expectedBytes = Encoding.UTF8.GetBytes(secret);
-    var providedBytes = Encoding.UTF8.GetBytes(provided);
+    var expectedBytes = Encoding.UTF8.GetBytes(providerConfig.WebhookSecretHash);
+    var providedBytes = Encoding.UTF8.GetBytes(HashSecret(provided));
     return expectedBytes.Length == providedBytes.Length &&
            CryptographicOperations.FixedTimeEquals(expectedBytes, providedBytes);
+}
+
+static Guid? ResolveTenantId(HttpContext context)
+{
+    return Guid.TryParse(context.Request.Headers[TenantHeaders.TenantId].ToString(), out var tenantId) ? tenantId : null;
+}
+
+static string HashSecret(string value)
+{
+    var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(value));
+    return Convert.ToHexString(bytes);
 }
 
 static bool IsTerminalPaymentStatus(string status)
@@ -387,8 +447,10 @@ static bool IsTerminalPaymentStatus(string status)
 
 public sealed record CreatePaymentRequest(Guid ClientId, Guid? OrderId, Guid? BookingId, decimal Amount, string Currency, string Type, string Provider, string? Promocode, string? ReturnUrl);
 public sealed record CreatePaymentResponse(Guid PaymentId, string PaymentUrl, string ReturnUrl, string CheckoutMode, string Status, decimal Amount, decimal Discount);
+public sealed record TenantPaymentProviderDto(Guid Id, string Provider, string DisplayName, bool IsActive, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt);
+public sealed record UpsertTenantPaymentProviderRequest(string DisplayName, string EncryptedCredentials, string WebhookSecret, bool IsActive);
 public sealed record PaymentStatusResponse(Guid Id, Guid? BookingId, Guid? OrderId, string Status, string Type, string Provider, decimal PayableAmount, decimal RefundedAmount, string Currency, DateTimeOffset CreatedAt);
-public sealed record YooKassaWebhook(Guid PaymentId, string ExternalPaymentId, bool Succeeded, string? Reason);
+public sealed record YooKassaWebhook(Guid PaymentId, string ExternalPaymentId, bool Succeeded, string? Reason, Guid? TenantId);
 public sealed record WebhookPaymentResponse(Guid PaymentId, string Status, string ExternalPaymentId, bool Duplicate);
 public sealed record RefundRequest(decimal Amount, string Reason);
 public sealed record BookingPaymentSucceededRequest(Guid PaymentId, decimal Amount);

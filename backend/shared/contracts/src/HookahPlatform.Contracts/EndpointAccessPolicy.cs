@@ -70,6 +70,7 @@ public static class EndpointAccessPolicy
         new("GET", "/api/payments", [PermissionCodes.OrdersManage]),
         new("POST", "/api/payments/create", [PermissionCodes.BookingsCreate, PermissionCodes.OrdersManage]),
         new("POST", "/api/payments", [PermissionCodes.OrdersManage]),
+        new("PUT", "/api/payments", [PermissionCodes.OrdersManage]),
 
         new("GET", "/api/notifications", [PermissionCodes.BookingsManage]),
         new("GET", "/api/notifications/templates", [PermissionCodes.BookingsManage]),
