@@ -174,7 +174,7 @@ services:
       db-migrator:
         condition: service_completed_successfully
       rabbitmq:
-        condition: service_started
+        condition: service_healthy
       mixology-service:
         condition: service_started
 
@@ -244,7 +244,7 @@ services:
       db-migrator:
         condition: service_completed_successfully
       rabbitmq:
-        condition: service_started
+        condition: service_healthy
 
   analytics-service:
     build:
@@ -264,7 +264,7 @@ services:
       db-migrator:
         condition: service_completed_successfully
       rabbitmq:
-        condition: service_started
+        condition: service_healthy
 
   review-service:
     build:
@@ -327,13 +327,14 @@ services:
 
   rabbitmq:
     image: rabbitmq:3-management
-    environment:
-      RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: -rabbitmq_management load_definitions "/etc/rabbitmq/definitions.json"
     ports:
       - "5672:5672"
       - "15672:15672"
-    volumes:
-      - ./rabbitmq/definitions.json:/etc/rabbitmq/definitions.json:ro
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
 
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.104.0

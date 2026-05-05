@@ -142,44 +142,59 @@ sealed class AnalyticsRabbitMqConsumer(IServiceScopeFactory scopeFactory, IConfi
         if (!_enabled) return;
 
         var factory = CreateFactory(configuration);
-        await using var connection = await factory.CreateConnectionAsync(stoppingToken);
-        await using var channel = await connection.CreateChannelAsync(cancellationToken: stoppingToken);
-        await channel.ExchangeDeclareAsync(_exchange, ExchangeType.Topic, durable: true, autoDelete: false, cancellationToken: stoppingToken);
-        await channel.QueueDeclareAsync(_queue, durable: true, exclusive: false, autoDelete: false, arguments: new Dictionary<string, object?> { ["x-dead-letter-exchange"] = MessagingCatalog.DeadLetterExchange }, cancellationToken: stoppingToken);
-        await channel.QueueBindAsync(_queue, _exchange, "#", cancellationToken: stoppingToken);
-
-        var consumer = new AsyncEventingBasicConsumer(channel);
-        consumer.ReceivedAsync += async (_, args) =>
+        while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                var eventName = args.BasicProperties.Type;
-                if (string.IsNullOrWhiteSpace(eventName) && args.BasicProperties.Headers?.TryGetValue("event_name", out var header) == true) eventName = ReadHeaderAsString(header);
-                var message = new OutboxMessage { EventName = eventName ?? string.Empty, Payload = Encoding.UTF8.GetString(args.Body.Span) };
-                var integrationEvent = OutboxMessageSerializer.Deserialize(message);
-                var envelope = integrationEvent is null ? null : AnalyticsEventProcessor.ToEnvelope(integrationEvent);
-                if (integrationEvent is null) throw new InvalidOperationException($"Invalid analytics event '{eventName}'.");
-                if (envelope is null)
+                await using var connection = await factory.CreateConnectionAsync(stoppingToken);
+                await using var channel = await connection.CreateChannelAsync(cancellationToken: stoppingToken);
+                await channel.ExchangeDeclareAsync(_exchange, ExchangeType.Topic, durable: true, autoDelete: false, cancellationToken: stoppingToken);
+                await channel.QueueDeclareAsync(_queue, durable: true, exclusive: false, autoDelete: false, arguments: new Dictionary<string, object?> { ["x-dead-letter-exchange"] = MessagingCatalog.DeadLetterExchange }, cancellationToken: stoppingToken);
+                await channel.QueueBindAsync(_queue, _exchange, "#", cancellationToken: stoppingToken);
+
+                var consumer = new AsyncEventingBasicConsumer(channel);
+                consumer.ReceivedAsync += async (_, args) =>
                 {
-                    logger.LogDebug("Skipping unsupported analytics event '{EventName}'.", eventName);
-                    await channel.BasicAckAsync(args.DeliveryTag, multiple: false, cancellationToken: args.CancellationToken);
-                    return;
-                }
-                using var scope = scopeFactory.CreateScope();
-                var db = scope.ServiceProvider.GetRequiredService<AnalyticsDbContext>();
-                var result = await AnalyticsEventProcessor.ApplyAsync(envelope, db, args.CancellationToken);
-                if (result is IStatusCodeHttpResult { StatusCode: >= 400 }) throw new InvalidOperationException($"Analytics event '{eventName}' was rejected.");
-                await channel.BasicAckAsync(args.DeliveryTag, multiple: false, cancellationToken: args.CancellationToken);
+                    try
+                    {
+                        var eventName = args.BasicProperties.Type;
+                        if (string.IsNullOrWhiteSpace(eventName) && args.BasicProperties.Headers?.TryGetValue("event_name", out var header) == true) eventName = ReadHeaderAsString(header);
+                        var message = new OutboxMessage { EventName = eventName ?? string.Empty, Payload = Encoding.UTF8.GetString(args.Body.Span) };
+                        var integrationEvent = OutboxMessageSerializer.Deserialize(message);
+                        var envelope = integrationEvent is null ? null : AnalyticsEventProcessor.ToEnvelope(integrationEvent);
+                        if (integrationEvent is null) throw new InvalidOperationException($"Invalid analytics event '{eventName}'.");
+                        if (envelope is null)
+                        {
+                            logger.LogDebug("Skipping unsupported analytics event '{EventName}'.", eventName);
+                            await channel.BasicAckAsync(args.DeliveryTag, multiple: false, cancellationToken: args.CancellationToken);
+                            return;
+                        }
+                        using var scope = scopeFactory.CreateScope();
+                        var db = scope.ServiceProvider.GetRequiredService<AnalyticsDbContext>();
+                        var result = await AnalyticsEventProcessor.ApplyAsync(envelope, db, args.CancellationToken);
+                        if (result is IStatusCodeHttpResult { StatusCode: >= 400 }) throw new InvalidOperationException($"Analytics event '{eventName}' was rejected.");
+                        await channel.BasicAckAsync(args.DeliveryTag, multiple: false, cancellationToken: args.CancellationToken);
+                    }
+                    catch (Exception exception)
+                    {
+                        logger.LogWarning(exception, "RabbitMQ analytics event handling failed.");
+                        await channel.BasicNackAsync(args.DeliveryTag, multiple: false, requeue: false, cancellationToken: args.CancellationToken);
+                    }
+                };
+
+                await channel.BasicConsumeAsync(_queue, autoAck: false, consumer, cancellationToken: stoppingToken);
+                await Task.Delay(Timeout.InfiniteTimeSpan, stoppingToken);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                return;
             }
             catch (Exception exception)
             {
-                logger.LogWarning(exception, "RabbitMQ analytics event handling failed.");
-                await channel.BasicNackAsync(args.DeliveryTag, multiple: false, requeue: false, cancellationToken: args.CancellationToken);
+                logger.LogWarning(exception, "RabbitMQ connection failed (host={Host}). Retrying...", configuration["RabbitMQ:HostName"] ?? "localhost");
+                await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken);
             }
-        };
-
-        await channel.BasicConsumeAsync(_queue, autoAck: false, consumer, cancellationToken: stoppingToken);
-        await Task.Delay(Timeout.InfiniteTimeSpan, stoppingToken);
+        }
     }
 
     private static ConnectionFactory CreateFactory(IConfiguration configuration) => new()
