@@ -1,5 +1,6 @@
 using HookahPlatform.BuildingBlocks;
 using HookahPlatform.BuildingBlocks.Persistence;
+using HookahPlatform.BuildingBlocks.Tenancy;
 using HookahPlatform.Contracts;
 using HookahPlatform.NotificationService.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -18,9 +19,10 @@ var app = builder.Build();
 app.UseHookahServiceDefaults();
 app.MapPersistenceHealth<NotificationDbContext>("notification-service");
 
-app.MapGet("/api/notifications", async (Guid? userId, bool? unreadOnly, NotificationDbContext db, CancellationToken cancellationToken) =>
+app.MapGet("/api/notifications", async (Guid? userId, bool? unreadOnly, NotificationDbContext db, ITenantContext tenantContext, CancellationToken cancellationToken) =>
 {
-    var query = db.Notifications.AsNoTracking();
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var query = db.Notifications.AsNoTracking().Where(notification => notification.TenantId == tenantId);
     if (userId is not null) query = query.Where(notification => notification.UserId == userId);
     if (unreadOnly == true) query = query.Where(notification => notification.ReadAt == null);
     return Results.Ok(await query.OrderByDescending(notification => notification.CreatedAt)
@@ -37,18 +39,22 @@ app.MapGet("/api/notifications", async (Guid? userId, bool? unreadOnly, Notifica
         .ToListAsync(cancellationToken));
 });
 
-app.MapGet("/api/notifications/templates", async (NotificationDbContext db, CancellationToken cancellationToken) =>
-    Results.Ok(await db.Templates.AsNoTracking().OrderBy(template => template.Code).ToListAsync(cancellationToken)));
+app.MapGet("/api/notifications/templates", async (NotificationDbContext db, ITenantContext tenantContext, CancellationToken cancellationToken) =>
+{
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    return Results.Ok(await db.Templates.AsNoTracking().Where(template => template.TenantId == tenantId).OrderBy(template => template.Code).ToListAsync(cancellationToken));
+});
 
-app.MapPost("/api/notifications/templates", async (UpsertNotificationTemplateRequest request, NotificationDbContext db, CancellationToken cancellationToken) =>
+app.MapPost("/api/notifications/templates", async (UpsertNotificationTemplateRequest request, NotificationDbContext db, ITenantContext tenantContext, CancellationToken cancellationToken) =>
 {
     if (string.IsNullOrWhiteSpace(request.Code) || string.IsNullOrWhiteSpace(request.Channel) || string.IsNullOrWhiteSpace(request.Title) || string.IsNullOrWhiteSpace(request.Message))
     {
         return HttpResults.Validation("Template code, channel, title and message are required.");
     }
 
+    var tenantId = tenantContext.GetTenantIdOrDemo();
     var code = request.Code.Trim();
-    var existing = await db.Templates.FirstOrDefaultAsync(template => template.Code == code, cancellationToken);
+    var existing = await db.Templates.FirstOrDefaultAsync(template => template.TenantId == tenantId && template.Code == code, cancellationToken);
     if (existing is not null)
     {
         return HttpResults.Conflict($"Notification template '{code}' already exists.");
@@ -56,6 +62,7 @@ app.MapPost("/api/notifications/templates", async (UpsertNotificationTemplateReq
 
     var template = new NotificationTemplateEntity
     {
+        TenantId = tenantId,
         Code = code,
         Channel = request.Channel.Trim().ToUpperInvariant(),
         Title = request.Title.Trim(),
@@ -66,9 +73,10 @@ app.MapPost("/api/notifications/templates", async (UpsertNotificationTemplateReq
     return Results.Created($"/api/notifications/templates/{template.Code}", template);
 });
 
-app.MapPut("/api/notifications/templates/{code}", async (string code, UpsertNotificationTemplateRequest request, NotificationDbContext db, CancellationToken cancellationToken) =>
+app.MapPut("/api/notifications/templates/{code}", async (string code, UpsertNotificationTemplateRequest request, NotificationDbContext db, ITenantContext tenantContext, CancellationToken cancellationToken) =>
 {
-    var template = await db.Templates.FirstOrDefaultAsync(candidate => candidate.Code == code, cancellationToken);
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var template = await db.Templates.FirstOrDefaultAsync(candidate => candidate.TenantId == tenantId && candidate.Code == code, cancellationToken);
     if (template is null) return Results.NotFound(new ProblemDetailsDto("not_found", $"NotificationTemplate '{code}' was not found."));
     if (string.IsNullOrWhiteSpace(request.Channel) || string.IsNullOrWhiteSpace(request.Title) || string.IsNullOrWhiteSpace(request.Message))
     {
@@ -82,30 +90,32 @@ app.MapPut("/api/notifications/templates/{code}", async (string code, UpsertNoti
     return Results.Ok(template);
 });
 
-app.MapDelete("/api/notifications/templates/{code}", async (string code, NotificationDbContext db, CancellationToken cancellationToken) =>
+app.MapDelete("/api/notifications/templates/{code}", async (string code, NotificationDbContext db, ITenantContext tenantContext, CancellationToken cancellationToken) =>
 {
-    var template = await db.Templates.FirstOrDefaultAsync(candidate => candidate.Code == code, cancellationToken);
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var template = await db.Templates.FirstOrDefaultAsync(candidate => candidate.TenantId == tenantId && candidate.Code == code, cancellationToken);
     if (template is null) return Results.NotFound(new ProblemDetailsDto("not_found", $"NotificationTemplate '{code}' was not found."));
     db.Templates.Remove(template);
     await db.SaveChangesAsync(cancellationToken);
     return Results.NoContent();
 });
 
-app.MapGet("/api/notifications/preferences/{userId:guid}", async (Guid userId, HttpContext context, NotificationDbContext db, CancellationToken cancellationToken) =>
+app.MapGet("/api/notifications/preferences/{userId:guid}", async (Guid userId, HttpContext context, NotificationDbContext db, ITenantContext tenantContext, CancellationToken cancellationToken) =>
 {
     if (!CanActForUser(context, userId)) return Results.Json(new ProblemDetailsDto("forbidden", "Notification preferences can only be managed for the current user."), statusCode: StatusCodes.Status403Forbidden);
-    var preference = await NotificationEventProcessor.GetOrCreatePreferenceAsync(userId, db, cancellationToken);
+    var preference = await NotificationEventProcessor.GetOrCreatePreferenceAsync(tenantContext.GetTenantIdOrDemo(), userId, db, cancellationToken);
     await db.SaveChangesAsync(cancellationToken);
     return Results.Ok(preference);
 });
 
-app.MapPut("/api/notifications/preferences/{userId:guid}", async (Guid userId, UpdateNotificationPreferenceRequest request, HttpContext context, NotificationDbContext db, CancellationToken cancellationToken) =>
+app.MapPut("/api/notifications/preferences/{userId:guid}", async (Guid userId, UpdateNotificationPreferenceRequest request, HttpContext context, NotificationDbContext db, ITenantContext tenantContext, CancellationToken cancellationToken) =>
 {
     if (!CanActForUser(context, userId)) return Results.Json(new ProblemDetailsDto("forbidden", "Notification preferences can only be managed for the current user."), statusCode: StatusCodes.Status403Forbidden);
-    var preference = await db.Preferences.FirstOrDefaultAsync(candidate => candidate.UserId == userId, cancellationToken);
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var preference = await db.Preferences.FirstOrDefaultAsync(candidate => candidate.TenantId == tenantId && candidate.UserId == userId, cancellationToken);
     if (preference is null)
     {
-        preference = new NotificationPreferenceEntity { UserId = userId };
+        preference = new NotificationPreferenceEntity { TenantId = tenantId, UserId = userId };
         db.Preferences.Add(preference);
     }
     preference.CrmEnabled = request.CrmEnabled;
@@ -117,18 +127,20 @@ app.MapPut("/api/notifications/preferences/{userId:guid}", async (Guid userId, U
     return Results.Ok(preference);
 });
 
-app.MapPatch("/api/notifications/{id:guid}/read", async (Guid id, NotificationDbContext db, CancellationToken cancellationToken) =>
+app.MapPatch("/api/notifications/{id:guid}/read", async (Guid id, NotificationDbContext db, ITenantContext tenantContext, CancellationToken cancellationToken) =>
 {
-    var notification = await db.Notifications.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var notification = await db.Notifications.FirstOrDefaultAsync(candidate => candidate.Id == id && candidate.TenantId == tenantId, cancellationToken);
     if (notification is null) return HttpResults.NotFound("Notification", id);
     notification.ReadAt = DateTimeOffset.UtcNow;
     await db.SaveChangesAsync(cancellationToken);
     return Results.Ok(notification);
 });
 
-app.MapDelete("/api/notifications/{id:guid}", async (Guid id, HttpContext context, NotificationDbContext db, CancellationToken cancellationToken) =>
+app.MapDelete("/api/notifications/{id:guid}", async (Guid id, HttpContext context, NotificationDbContext db, ITenantContext tenantContext, CancellationToken cancellationToken) =>
 {
-    var notification = await db.Notifications.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var notification = await db.Notifications.FirstOrDefaultAsync(candidate => candidate.Id == id && candidate.TenantId == tenantId, cancellationToken);
     if (notification is null) return HttpResults.NotFound("Notification", id);
     if (!CanActForUser(context, notification.UserId)) return Results.Json(new ProblemDetailsDto("forbidden", "Notifications can only be deleted by the recipient or booking managers."), statusCode: StatusCodes.Status403Forbidden);
     db.Notifications.Remove(notification);
@@ -136,7 +148,38 @@ app.MapDelete("/api/notifications/{id:guid}", async (Guid id, HttpContext contex
     return Results.NoContent();
 });
 
-app.MapPost("/api/notifications/send", async (SendNotificationRequest request, NotificationDbContext db, CancellationToken cancellationToken) =>
+app.MapGet("/api/notifications/channels", async (NotificationDbContext db, ITenantContext tenantContext, CancellationToken cancellationToken) =>
+{
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var channels = await db.TenantChannels.AsNoTracking()
+        .Where(channel => channel.TenantId == tenantId)
+        .OrderBy(channel => channel.Channel)
+        .Select(channel => new TenantNotificationChannelDto(channel.Id, channel.Channel, channel.IsActive, channel.CreatedAt, channel.UpdatedAt))
+        .ToListAsync(cancellationToken);
+    return Results.Ok(channels);
+});
+
+app.MapPut("/api/notifications/channels/{channel}", async (string channel, UpsertTenantNotificationChannelRequest request, NotificationDbContext db, ITenantContext tenantContext, CancellationToken cancellationToken) =>
+{
+    var tenantId = tenantContext.GetTenantIdOrDemo();
+    var channelCode = channel.Trim().ToUpperInvariant();
+    if (string.IsNullOrWhiteSpace(channelCode)) return HttpResults.Validation("Channel is required.");
+    if (string.IsNullOrWhiteSpace(request.EncryptedSettings)) return HttpResults.Validation("Encrypted settings are required.");
+    var now = DateTimeOffset.UtcNow;
+    var entity = await db.TenantChannels.FirstOrDefaultAsync(candidate => candidate.TenantId == tenantId && candidate.Channel == channelCode, cancellationToken);
+    if (entity is null)
+    {
+        entity = new TenantNotificationChannelEntity { Id = Guid.NewGuid(), TenantId = tenantId, Channel = channelCode, CreatedAt = now };
+        db.TenantChannels.Add(entity);
+    }
+    entity.EncryptedSettings = request.EncryptedSettings.Trim();
+    entity.IsActive = request.IsActive;
+    entity.UpdatedAt = now;
+    await db.SaveChangesAsync(cancellationToken);
+    return Results.Ok(new TenantNotificationChannelDto(entity.Id, entity.Channel, entity.IsActive, entity.CreatedAt, entity.UpdatedAt));
+});
+
+app.MapPost("/api/notifications/send", async (SendNotificationRequest request, NotificationDbContext db, ITenantContext tenantContext, CancellationToken cancellationToken) =>
 {
     if (request.UserId == Guid.Empty) return HttpResults.Validation("User is required.");
     if (string.IsNullOrWhiteSpace(request.Channel) || string.IsNullOrWhiteSpace(request.Title) || string.IsNullOrWhiteSpace(request.Message))
@@ -144,13 +187,16 @@ app.MapPost("/api/notifications/send", async (SendNotificationRequest request, N
         return HttpResults.Validation("Notification channel, title and message are required.");
     }
 
+    var tenantId = tenantContext.GetTenantIdOrDemo();
     var channel = request.Channel.Trim().ToUpperInvariant();
     var title = request.Title.Trim();
     var message = request.Message.Trim();
-    if (!await NotificationEventProcessor.ChannelIsAllowedAsync(request.UserId, channel, db, cancellationToken)) return HttpResults.Validation($"Channel '{channel}' is disabled for this user.");
+    if (!await NotificationEventProcessor.TenantChannelIsActiveAsync(tenantId, channel, db, cancellationToken)) return HttpResults.Validation($"Channel '{channel}' is not active for this tenant.");
+    if (!await NotificationEventProcessor.ChannelIsAllowedAsync(tenantId, request.UserId, channel, db, cancellationToken)) return HttpResults.Validation($"Channel '{channel}' is disabled for this user.");
     var notification = new NotificationEntity
     {
         Id = Guid.NewGuid(),
+        TenantId = tenantId,
         UserId = request.UserId,
         Channel = channel,
         Title = title,
@@ -160,13 +206,14 @@ app.MapPost("/api/notifications/send", async (SendNotificationRequest request, N
         ReadAt = null
     };
     db.Notifications.Add(notification);
+    db.Deliveries.Add(NotificationEventProcessor.CreateDelivery(tenantId, notification.Id, channel, request.UserId.ToString(), "STORED", null));
     await db.SaveChangesAsync(cancellationToken);
     return Results.Created($"/api/notifications/{notification.Id}", notification);
 });
 
-app.MapPost("/api/notifications/dispatch-event", async (NotificationEventRequest request, NotificationDbContext db, IHttpClientFactory httpClientFactory, IConfiguration configuration, CancellationToken cancellationToken) =>
+app.MapPost("/api/notifications/dispatch-event", async (NotificationEventRequest request, NotificationDbContext db, IHttpClientFactory httpClientFactory, IConfiguration configuration, ITenantContext tenantContext, CancellationToken cancellationToken) =>
 {
-    var result = await NotificationEventProcessor.ApplyAsync(request, db, httpClientFactory, configuration, cancellationToken);
+    var result = await NotificationEventProcessor.ApplyAsync(tenantContext.GetTenantIdOrDemo(), request, db, httpClientFactory, configuration, cancellationToken);
     return result;
 });
 
@@ -188,18 +235,18 @@ static bool HasForwardedPermission(HttpContext context, string permission)
 
 static class NotificationEventProcessor
 {
-    public static async Task<NotificationPreferenceEntity> GetOrCreatePreferenceAsync(Guid userId, NotificationDbContext db, CancellationToken cancellationToken)
+    public static async Task<NotificationPreferenceEntity> GetOrCreatePreferenceAsync(Guid tenantId, Guid userId, NotificationDbContext db, CancellationToken cancellationToken)
     {
-        var preference = await db.Preferences.FirstOrDefaultAsync(candidate => candidate.UserId == userId, cancellationToken);
+        var preference = await db.Preferences.FirstOrDefaultAsync(candidate => candidate.TenantId == tenantId && candidate.UserId == userId, cancellationToken);
         if (preference is not null) return preference;
-        preference = new NotificationPreferenceEntity { UserId = userId, CrmEnabled = true, TelegramEnabled = true, SmsEnabled = true, EmailEnabled = true, PushEnabled = true };
+        preference = new NotificationPreferenceEntity { TenantId = tenantId, UserId = userId, CrmEnabled = true, TelegramEnabled = true, SmsEnabled = true, EmailEnabled = true, PushEnabled = true };
         db.Preferences.Add(preference);
         return preference;
     }
 
-    public static async Task<bool> ChannelIsAllowedAsync(Guid userId, string channel, NotificationDbContext db, CancellationToken cancellationToken)
+    public static async Task<bool> ChannelIsAllowedAsync(Guid tenantId, Guid userId, string channel, NotificationDbContext db, CancellationToken cancellationToken)
     {
-        var preference = await GetOrCreatePreferenceAsync(userId, db, cancellationToken);
+        var preference = await GetOrCreatePreferenceAsync(tenantId, userId, db, cancellationToken);
         return channel.ToUpperInvariant() switch
         {
             "CRM" => preference.CrmEnabled,
@@ -211,6 +258,17 @@ static class NotificationEventProcessor
         };
     }
 
+    public static async Task<bool> TenantChannelIsActiveAsync(Guid tenantId, string channel, NotificationDbContext db, CancellationToken cancellationToken)
+    {
+        if (channel.Equals("CRM", StringComparison.OrdinalIgnoreCase)) return true;
+        return await db.TenantChannels.AsNoTracking().AnyAsync(candidate => candidate.TenantId == tenantId && candidate.Channel == channel.ToUpperInvariant() && candidate.IsActive, cancellationToken);
+    }
+
+    public static NotificationDeliveryEntity CreateDelivery(Guid tenantId, Guid? notificationId, string channel, string recipient, string status, string? error)
+    {
+        return new NotificationDeliveryEntity { Id = Guid.NewGuid(), TenantId = tenantId, NotificationId = notificationId, Channel = channel, Recipient = recipient, Status = status, Error = error, CreatedAt = DateTimeOffset.UtcNow };
+    }
+
     private static string Render(string template, IReadOnlyDictionary<string, string> values)
     {
         var result = template;
@@ -218,7 +276,7 @@ static class NotificationEventProcessor
         return result;
     }
 
-    public static async Task<IResult> ApplyAsync(NotificationEventRequest request, NotificationDbContext db, IHttpClientFactory httpClientFactory, IConfiguration configuration, CancellationToken cancellationToken)
+    public static async Task<IResult> ApplyAsync(Guid tenantId, NotificationEventRequest request, NotificationDbContext db, IHttpClientFactory httpClientFactory, IConfiguration configuration, CancellationToken cancellationToken)
     {
         if (await db.ProcessedEvents.AnyAsync(item => item.Handler == "notification-service" && item.EventId == request.EventId, cancellationToken))
         {
@@ -239,7 +297,7 @@ static class NotificationEventProcessor
         };
 
         if (templateCode is null) return HttpResults.Validation($"No notification template for event '{request.Event}'.");
-        var template = await db.Templates.AsNoTracking().FirstOrDefaultAsync(candidate => candidate.Code == templateCode, cancellationToken);
+        var template = await db.Templates.AsNoTracking().FirstOrDefaultAsync(candidate => candidate.TenantId == tenantId && candidate.Code == templateCode, cancellationToken);
         if (template is null) return HttpResults.Validation($"No notification template for event '{request.Event}'.");
 
         var userIds = await ResolveRecipientsAsync(request, httpClientFactory, configuration, cancellationToken);
@@ -251,10 +309,20 @@ static class NotificationEventProcessor
         var created = new List<NotificationEntity>();
         foreach (var userId in userIds)
         {
-            if (!await ChannelIsAllowedAsync(userId, template.Channel, db, cancellationToken)) continue;
+            if (!await TenantChannelIsActiveAsync(tenantId, template.Channel, db, cancellationToken))
+            {
+                db.Deliveries.Add(CreateDelivery(tenantId, null, template.Channel, userId.ToString(), "SKIPPED", "tenant channel inactive"));
+                continue;
+            }
+            if (!await ChannelIsAllowedAsync(tenantId, userId, template.Channel, db, cancellationToken))
+            {
+                db.Deliveries.Add(CreateDelivery(tenantId, null, template.Channel, userId.ToString(), "SKIPPED", "user channel disabled"));
+                continue;
+            }
             var notification = new NotificationEntity
             {
                 Id = Guid.NewGuid(),
+                TenantId = tenantId,
                 UserId = userId,
                 Channel = template.Channel,
                 Title = Render(template.Title, request.Values),
@@ -264,6 +332,7 @@ static class NotificationEventProcessor
                 ReadAt = null
             };
             db.Notifications.Add(notification);
+            db.Deliveries.Add(CreateDelivery(tenantId, notification.Id, template.Channel, userId.ToString(), "STORED", null));
             created.Add(notification);
         }
         db.ProcessedEvents.Add(new ProcessedIntegrationEventEntity { Handler = "notification-service", EventId = request.EventId, ProcessedAt = DateTimeOffset.UtcNow });
@@ -455,7 +524,7 @@ sealed class NotificationRabbitMqConsumer(IServiceScopeFactory scopeFactory, ICo
                         using var scope = scopeFactory.CreateScope();
                         var db = scope.ServiceProvider.GetRequiredService<NotificationDbContext>();
                         var httpClientFactory = scope.ServiceProvider.GetRequiredService<IHttpClientFactory>();
-                        var result = await NotificationEventProcessor.ApplyAsync(request, db, httpClientFactory, configuration, args.CancellationToken);
+                        var result = await NotificationEventProcessor.ApplyAsync(TenantConstants.DemoTenantId, request, db, httpClientFactory, configuration, args.CancellationToken);
                         if (result is IStatusCodeHttpResult { StatusCode: >= 400 }) throw new InvalidOperationException($"Notification event '{eventName}' was rejected.");
                         await channel.BasicAckAsync(args.DeliveryTag, multiple: false, cancellationToken: args.CancellationToken);
                     }
@@ -506,6 +575,8 @@ sealed class NotificationRabbitMqConsumer(IServiceScopeFactory scopeFactory, ICo
 
 public sealed record SendNotificationRequest(Guid UserId, string Channel, string Title, string Message, IReadOnlyDictionary<string, string>? Metadata);
 public sealed record UpsertNotificationTemplateRequest(string Code, string Channel, string Title, string Message);
+public sealed record TenantNotificationChannelDto(Guid Id, string Channel, bool IsActive, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt);
+public sealed record UpsertTenantNotificationChannelRequest(string EncryptedSettings, bool IsActive);
 public sealed record UpdateNotificationPreferenceRequest(bool CrmEnabled, bool TelegramEnabled, bool SmsEnabled, bool EmailEnabled, bool PushEnabled);
 public sealed record NotificationEventRequest(Guid EventId, string Event, IReadOnlyCollection<Guid> UserIds, IReadOnlyDictionary<string, string> Values);
 public sealed record UserProfileDto(Guid Id, string Name, string Phone, string? Email, string Role, Guid? BranchId, string Status);

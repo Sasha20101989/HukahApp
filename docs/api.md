@@ -15,7 +15,7 @@ Implemented service endpoints:
 - Orders: `/api/orders`, `/api/orders/status-flow`, `/api/orders/runtime/branch/{branchId}`, `/api/orders/{id}`, `/api/orders/{id}/status`, `/api/orders/{id}/payment-succeeded`, `/api/orders/{id}/assign-hookah-master`, `/api/orders/{id}/coal-change`, `/api/orders/{id}/coal-timer`
 - Bookings: `/api/bookings/availability`, `/api/bookings/holds`, `/api/bookings/holds/{id}`, `/api/bookings`, `/api/bookings/{id}`, `/api/bookings/{id}/confirm`, `/api/bookings/{id}/cancel`, `/api/bookings/{id}/reschedule`, `/api/bookings/{id}/no-show`, `/api/bookings/{id}/client-arrived`, `/api/bookings/{id}/complete`, `/api/bookings/mark-expired-no-shows`
 - Payments: `/api/payments/create`, `/api/payments/providers`, `/api/payments/providers/{provider}`, `/api/payments/status/{id}`, `/api/payments/webhook/yookassa`, `/api/payments/{id}`, `/api/payments/{id}/refund`
-- Notifications: `/api/notifications`, `/api/notifications/templates`, `/api/notifications/preferences/{userId}`, `/api/notifications/{id}/read`, `/api/notifications/send`, `/api/notifications/dispatch-event`
+- Notifications: `/api/notifications`, `/api/notifications/templates`, `/api/notifications/channels`, `/api/notifications/channels/{channel}`, `/api/notifications/preferences/{userId}`, `/api/notifications/{id}/read`, `/api/notifications/send`, `/api/notifications/dispatch-event`
 - Analytics: `/api/analytics/events`, `/api/analytics/dashboard`, `/api/analytics/top-mixes`, `/api/analytics/tobacco-usage`, `/api/analytics/staff-performance`, `/api/analytics/table-load`
 - Reviews: `/api/reviews`, `/api/reviews/mixes/{mixId}/summary`, `/api/reviews/clients/{clientId}`
 - Promo: `/api/promocodes`, `/api/promocodes/{code}`, `/api/promocodes/validate`, `/api/promocodes/redeem`, `/api/promocodes/{code}/deactivate`
@@ -45,6 +45,13 @@ Tenant payment provider management:
 - `PUT /api/payments/providers/{provider}` upserts encrypted provider credentials and webhook secret hash source for the current tenant.
 - `POST /api/payments/create` rejects a provider unless an active tenant-owned config exists.
 - Webhooks mutate payments only when the resolved tenant matches the stored `payments.tenant_id`.
+
+Tenant notification channel management:
+
+- `GET /api/notifications/channels` lists active/inactive channel configs for the current tenant.
+- `PUT /api/notifications/channels/{channel}` upserts encrypted channel settings for the current tenant.
+- Notification templates, preferences and notifications are filtered by current tenant.
+- Notification Service records delivery audit rows in `notification_deliveries` for stored and skipped deliveries.
 
 Client-owned flows have additional service-side checks: clients can only read/create their own bookings, create payments for themselves and read their own user permission/eligibility data unless their role has the required staff permission.
 
